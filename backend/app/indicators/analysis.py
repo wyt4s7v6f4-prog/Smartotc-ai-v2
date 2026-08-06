@@ -18,11 +18,11 @@ if response.status_code != 200:
         "body": response.text
     }
 
-response = response.json()
+    response = response.json()
 
     if response.get("retCode") != 0:
-        return {"error": response}
-
+        return {"error": response} 
+        
     candles = response["result"]["list"]
 
     df = pd.DataFrame(candles, columns=[
