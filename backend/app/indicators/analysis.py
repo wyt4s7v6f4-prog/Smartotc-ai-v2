@@ -9,16 +9,24 @@ url = (
     f"?category=linear&symbol={symbol}&interval={interval}&limit=250"
 )
 
-    candles = requests.get(url, timeout=10).json()
+    response = requests.get(url, timeout=10).json()
 
-    print(candles)
-    
-    if not isinstance(candles, list):
-        return {
-            "error": candles
-        }
-    df = pd.DataFrame(candles)
-    df = df.iloc[:, :6]
+if response.get("retCode") != 0:
+    return {"error": response}
+
+candles = response["result"]["list"]
+
+df = pd.DataFrame(candles, columns=[
+    "time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "turnover"
+])
+
+df = df.iloc[:, :6]
 
     df.columns = [
         "time",
@@ -47,6 +55,7 @@ url = (
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
 
+    df = df.iloc[::-1].reset_index(drop=True)
     last = df.iloc[-1]
 
     signal = "WAIT"
