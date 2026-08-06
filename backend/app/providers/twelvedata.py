@@ -32,6 +32,7 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
     )
 
     data = requests.get(url, timeout=10).json()
+    print(data)
 
     if "values" not in data:
         return {"error": data}
