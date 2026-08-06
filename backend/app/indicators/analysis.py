@@ -5,9 +5,9 @@ import ta
 
 def analyze(symbol="BTCUSDT", interval="1h"):
     url = (
-        f"https://api.binance.com/api/v3/klines"
-        f"?symbol={symbol}&interval={interval}&limit=250"
-    )
+    f"https://api.bybit.com/v5/market/kline"
+    f"?category=linear&symbol={symbol}&interval={interval}&limit=250"
+)
 
     candles = requests.get(url, timeout=10).json()
 
