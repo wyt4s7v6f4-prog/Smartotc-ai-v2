@@ -14,7 +14,9 @@ def analyze(symbol="BTCUSDT", interval="1h"):
     print(candles)
     
     if not isinstance(candles, list):
-        return candles
+        return {
+            "error": candles
+        }
     df = pd.DataFrame(candles)
     df = df.iloc[:, :6]
 
