@@ -11,12 +11,10 @@ app = FastAPI()
 templates = Jinja2Templates(directory="backend/app/templates")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html"
-    )
+@app.get("/")
+async def home():
+    return {"status": "ok"}
+    
 
 
 @app.get("/analyze")
