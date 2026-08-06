@@ -45,61 +45,61 @@ df = df.astype({
         "volume": float,
     })
 
-    df["ema20"] = ta.trend.ema_indicator(df["close"], window=20)
-    df["ema50"] = ta.trend.ema_indicator(df["close"], window=50)
-    df["ema200"] = ta.trend.ema_indicator(df["close"], window=200)
+df["ema20"] = ta.trend.ema_indicator(df["close"], window=20)
+df["ema50"] = ta.trend.ema_indicator(df["close"], window=50)
+df["ema200"] = ta.trend.ema_indicator(df["close"], window=200)
 
-    df["rsi"] = ta.momentum.rsi(df["close"], window=14)
+df["rsi"] = ta.momentum.rsi(df["close"], window=14)
 
-    macd = ta.trend.MACD(df["close"])
-    df["macd"] = macd.macd()
-    df["macd_signal"] = macd.macd_signal()
+macd = ta.trend.MACD(df["close"])
+df["macd"] = macd.macd()
+df["macd_signal"] = macd.macd_signal()
 
-    df = df.iloc[::-1].reset_index(drop=True)
-    last = df.iloc[-1]
+df = df.iloc[::-1].reset_index(drop=True)
+last = df.iloc[-1]
 
     signal = "WAIT"
     trend = "SIDEWAYS"
     score = 0
 
-    if last["ema20"] > last["ema50"]:
+if last["ema20"] > last["ema50"]:
         score += 20
 
-    if last["ema50"] > last["ema200"]:
+if last["ema50"] > last["ema200"]:
         score += 20
 
-    if 50 <= last["rsi"] <= 65:
+ if 50 <= last["rsi"] <= 65:
         score += 15
 
-    elif 35 <= last["rsi"] < 50:
+elif 35 <= last["rsi"] < 50:
         score += 10
 
-    if last["macd"] > last["macd_signal"]:
+if last["macd"] > last["macd_signal"]:
         score += 20
 
-    if last["close"] > last["ema20"]:
+if last["close"] > last["ema20"]:
         score += 15
 
     score = min(score, 100)
 
-    if (
+if (
         last["ema20"] > last["ema50"]
         and 45 <= last["rsi"] <= 70
         and last["macd"] > last["macd_signal"]
     ):
         signal = "BUY"
 
-    elif (
+elif (
         last["ema20"] < last["ema50"]
         and 30 <= last["rsi"] <= 55
         and last["macd"] < last["macd_signal"]
     ):
         signal = "SELL"
 
-    if last["ema20"] > last["ema50"] > last["ema200"]:
+if last["ema20"] > last["ema50"] > last["ema200"]:
         trend = "BULLISH"
 
-    elif last["ema20"] < last["ema50"] < last["ema200"]:
+elif last["ema20"] < last["ema50"] < last["ema200"]:
         trend = "BEARISH"
 
     trade_time = {
@@ -111,7 +111,7 @@ df = df.astype({
         "1d": "1-3 days",
     }.get(interval, "-")
 
-    return {
+return {
         "price": round(last["close"], 2),
         "ema20": round(last["ema20"], 2),
         "ema50": round(last["ema50"], 2),
