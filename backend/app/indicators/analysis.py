@@ -10,7 +10,8 @@ def analyze(symbol="BTCUSDT", interval="1h"):
     )
 
     candles = requests.get(url, timeout=10).json()
-
+    if not isinstance(candles, list):
+        return candles
     df = pd.DataFrame(candles)
     df = df.iloc[:, :6]
 
