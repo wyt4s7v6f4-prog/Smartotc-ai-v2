@@ -1,4 +1,4 @@
-from backend.app.indicators.analysis import analyze
+from app.indicators.analysis import analyze
 
 CRYPTO_PAIRS = [
     "BTCUSDT",

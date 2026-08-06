@@ -2,7 +2,8 @@ import requests
 import pandas as pd
 import ta
 
-API_KEY ="afdc8f80c3374bb7a5130679e76e57ae"
+import os
+API_KEY = os.getenv("TWELVEDATA_API_KEY","afdc8f80c3374bb7a5130679e76e57ae"
 
 
 def get_forex_data(symbol="EUR/USD", interval="1min"):
