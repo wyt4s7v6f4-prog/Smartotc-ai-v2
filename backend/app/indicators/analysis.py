@@ -58,9 +58,9 @@ df["macd_signal"] = macd.macd_signal()
 df = df.iloc[::-1].reset_index(drop=True)
 last = df.iloc[-1]
 
-    signal = "WAIT"
-    trend = "SIDEWAYS"
-    score = 0
+signal = "WAIT"
+trend = "SIDEWAYS"
+score = 0
 
 if last["ema20"] > last["ema50"]:
         score += 20
