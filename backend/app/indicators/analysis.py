@@ -37,7 +37,7 @@ df.columns = [
         "volume",
     ]
 
-    df = df.astype({
+df = df.astype({
         "open": float,
         "high": float,
         "low": float,
