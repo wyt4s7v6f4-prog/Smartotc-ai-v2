@@ -4,7 +4,7 @@ import ta
 
 
 def analyze(symbol="BTCUSDT", interval="1h"):
-url = (
+    url = (
     f"https://api.bybit.com/v5/market/kline"
     f"?category=linear&symbol={symbol}&interval={interval}&limit=250"
 )
