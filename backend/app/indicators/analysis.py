@@ -80,7 +80,7 @@ if last["macd"] > last["macd_signal"]:
 if last["close"] > last["ema20"]:
         score += 15
 
-    score = min(score, 100)
+score = min(score, 100)
 
 if (
         last["ema20"] > last["ema50"]
