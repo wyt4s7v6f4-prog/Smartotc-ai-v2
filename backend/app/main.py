@@ -1,10 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from backend.app.providers.twelvedata import get_forex_data
-from backend.app.providers.scanner import scan_market
+from app.providers.twelvedata import get_forex_data
+from app.providers.scanner import scan_market
 
-from backend.app.indicators.analysis import analyze
+from app.indicators.analysis import analyze
 
 app = FastAPI()
 
