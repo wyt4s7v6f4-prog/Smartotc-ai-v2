@@ -9,7 +9,16 @@ def analyze(symbol="BTCUSDT", interval="1h"):
     f"?category=linear&symbol={symbol}&interval={interval}&limit=250"
 )
 
-    response = requests.get(url, timeout=10).json()
+    response = requests.get(url, timeout=10)
+
+if response.status_code != 200:
+    return {
+        "error": "Bybit API error",
+        "status": response.status_code,
+        "body": response.text
+    }
+
+response = response.json()
 
 if response.get("retCode") != 0:
     return {"error": response}
