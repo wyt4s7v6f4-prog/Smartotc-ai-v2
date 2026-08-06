@@ -68,7 +68,7 @@ if last["ema20"] > last["ema50"]:
 if last["ema50"] > last["ema200"]:
         score += 20
 
- if 50 <= last["rsi"] <= 65:
+if 50 <= last["rsi"] <= 65:
         score += 15
 
 elif 35 <= last["rsi"] < 50:
@@ -102,7 +102,7 @@ if last["ema20"] > last["ema50"] > last["ema200"]:
 elif last["ema20"] < last["ema50"] < last["ema200"]:
         trend = "BEARISH"
 
-    trade_time = {
+trade_time = {
         "1m": "2-3 min",
         "5m": "10-15 min",
         "15m": "20-40 min",
