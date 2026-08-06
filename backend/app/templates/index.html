@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>SmartOTC AI</title>
+
+<style>
+body{
+    background:#0f172a;
+    color:white;
+    font-family:Arial;
+    text-align:center;
+}
+
+.container{
+    width:420px;
+    margin:auto;
+    margin-top:40px;
+}
+
+h1{
+    font-size:42px;
+}
+
+select,button{
+    padding:12px;
+    margin:10px;
+    border-radius:10px;
+    border:none;
+    font-size:18px;
+}
+
+button{
+    background:#22c55e;
+    color:white;
+    cursor:pointer;
+}
+
+.card{
+    background:#1e293b;
+    margin-top:30px;
+    border-radius:15px;
+    padding:20px;
+}
+
+.buy{
+    color:#00ff88;
+    font-size:40px;
+    font-weight:bold;
+}
+
+.sell{
+    color:#ff4444;
+    font-size:40px;
+    font-weight:bold;
+}
+
+.wait{
+    color:orange;
+    font-size:40px;
+    font-weight:bold;
+}
+
+.item{
+    margin:8px;
+    font-size:20px;
+}
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>SmartOTC AI</h1>
+
+<select id="symbol">
+
+    <optgroup label="Crypto">
+        <option>BTCUSDT</option>
+        <option>ETHUSDT</option>
+        <option>SOLUSDT</option>
+        <option>XRPUSDT</option>
+        <option>BNBUSDT</option>
+        <option>DOGEUSDT</option>
+        <option>ADAUSDT</option>
+        <option>LINKUSDT</option>
+        <option>AVAXUSDT</option>
+        <option>TONUSDT</option>
+        <option>TRXUSDT</option>
+        <option>LTCUSDT</option>
+    </optgroup>
+
+<optgroup label="OTC">
+
+        <option>EUR/USD OTC</option>
+        <option>GBP/USD OTC</option>
+        <option>USD/JPY OTC</option>
+        <option>USD/CHF OTC</option>
+        <option>USD/CAD OTC</option>
+        <option>AUD/USD OTC</option>
+        <option>NZD/USD OTC</option>
+        <option>EUR/JPY OTC</option>
+        <option>EUR/GBP OTC</option>
+        <option>EUR/CHF OTC</option>
+        <option>GBP/JPY OTC</option>
+        <option>AUD/JPY OTC</option>
+
+</optgroup>
+    <optgroup label="Forex">
+        <option>EUR/USD</option>
+        <option>GBP/USD</option>
+        <option>USD/JPY</option>
+        <option>AUD/USD</option>
+        <option>USD/CAD</option>
+        <option>NZD/USD</option>
+        <option>USD/CHF</option>
+    </optgroup>
+
+    <optgroup label="Metals">
+        <option>XAU/USD</option>
+        <option>XAG/USD</option>
+    </optgroup>
+
+</select>
+
+<select id="interval">
+<option>10s</option>
+<option>15s</option>
+<option>30s</option>
+
+<option>1m</option>
+<option>5m</option>
+<option>15m</option>
+<option>30m</option>
+<option>1h</option>
+<option>4h</option>
+<option>1d</option>
+</select>
+
+<br>
+
+<button onclick="analyze()">Analyze</button>
+
+<div class="card">
+
+<div id="signal" class="wait">WAIT</div>
+
+<div class="item">
+💰 Price:
+<span id="price">-</span>
+</div>
+
+<div class="item">
+📈 RSI:
+<span id="rsi">-</span>
+</div>
+
+<div class="item">
+📊 EMA20:
+<span id="ema20">-</span>
+</div>
+
+<div class="item">
+📊 EMA50:
+<span id="ema50">-</span>
+</div>
+
+<div class="item">
+🎯 Probability:
+<span id="probability">-</span>
+</div>
+
+<div class="item">
+⏳ Trade Time:
+<span id="time">-</span>
+</div>
+
+</div>
+
+</div>
+
+<script>
+
+async function analyze(){
+
+let symbol=document.getElementById("symbol").value;
+let interval=document.getElementById("interval").value;
+
+let r=await fetch(`/analyze?symbol=${symbol}&interval=${interval}`);
+let data=await r.json();
+
+document.getElementById("price").innerHTML=data.price;
+document.getElementById("ema20").innerHTML=data.ema20;
+document.getElementById("ema50").innerHTML=data.ema50;
+document.getElementById("rsi").innerHTML=data.rsi;
+
+let probability=70;
+
+if(data.signal=="BUY") probability=85;
+if(data.signal=="SELL") probability=84;
+
+document.getElementById("probability").innerHTML=probability+" %";
+
+let time="";
+
+if(interval=="1m") time="2-3 min";
+if(interval=="5m") time="10-15 min";
+if(interval=="15m") time="20-40 min";
+if(interval=="1h") time="2-4 h";
+if(interval=="4h") time="6-12 h";
+if(interval=="1d") time="1-3 days";
+
+document.getElementById("time").innerHTML=time;
+
+let signal=document.getElementById("signal");
+
+signal.innerHTML=data.signal;
+
+signal.className="";
+
+if(data.signal=="BUY")
+signal.classList.add("buy");
+
+if(data.signal=="SELL")
+signal.classList.add("sell");
+
+if(data.signal=="WAIT")
+signal.classList.add("wait");
+
+}
+
+</script>
+
+</body>
+</html>

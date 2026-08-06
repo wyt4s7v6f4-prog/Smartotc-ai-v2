@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+requests
+python-dotenv
+pydantic-settings
+pandas
+numpy
+ta
+python-binance
