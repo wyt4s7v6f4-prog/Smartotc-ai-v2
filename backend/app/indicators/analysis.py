@@ -5,24 +5,24 @@ import ta
 
 def analyze(symbol="BTCUSDT", interval="1h"):
     url = (
-    f"https://api.bybit.com/v5/market/kline"
-    f"?category=linear&symbol={symbol}&interval={interval}&limit=250"
-)
+        f"https://api.bybit.com/v5/market/kline"
+        f"?category=linear&symbol={symbol}&interval={interval}&limit=250"
+    )
 
     response = requests.get(url, timeout=10)
 
-if response.status_code != 200:
-    return {
-        "error": "Bybit API error",
-        "status": response.status_code,
-        "body": response.text
-    }
+    if response.status_code != 200:
+        return {
+            "error": "Bybit API error",
+            "status": response.status_code,
+            "body": response.text
+        }
 
     response = response.json()
 
     if response.get("retCode") != 0:
-        return {"error": response} 
-        
+        return {"error": response}
+
     candles = response["result"]["list"]
 
     df = pd.DataFrame(candles, columns=[
