@@ -7,8 +7,10 @@ from app.providers.scanner import scan_market
 from app.indicators.analysis import analyze
 
 app = FastAPI()
+from pathlib import Path
 
-templates = Jinja2Templates(directory="backend/app/templates")
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 @app.get("/")
