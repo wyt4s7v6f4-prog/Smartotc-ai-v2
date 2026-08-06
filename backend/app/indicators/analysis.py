@@ -28,7 +28,7 @@ df = pd.DataFrame(candles, columns=[
 
 df = df.iloc[:, :6]
 
-    df.columns = [
+df.columns = [
         "time",
         "open",
         "high",
