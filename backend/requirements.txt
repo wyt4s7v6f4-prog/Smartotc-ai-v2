@@ -6,5 +6,4 @@ pydantic-settings
 pandas
 numpy
 ta
-python-binance
 jinja2
