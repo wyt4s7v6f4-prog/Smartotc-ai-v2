@@ -7,16 +7,16 @@ from app.providers.scanner import scan_market
 from app.indicators.analysis import analyze
 
 app = FastAPI()
-from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+templates = Jinja2Templates(directory="app/templates")
 
 
-@app.get("/")
-async def home():
-    return {"status": "ok"}
-    
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html"
+    )
 
 
 @app.get("/analyze")
