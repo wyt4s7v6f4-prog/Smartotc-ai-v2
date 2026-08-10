@@ -3,135 +3,216 @@ import pandas as pd
 import ta
 
 
-def analyze(symbol="BTCUSDT", interval="1h"):
-    url = (
-        f"https://api.bybit.com/v5/market/kline"
-        f"?category=linear&symbol={symbol}&interval={interval}&limit=250"
-    )
+OKX_BASE_URL = "https://www.okx.com/api/v5/market/candles"
 
-    response = requests.get(url, timeout=10)
+INTERVAL_MAP = {
+    "1m": "1m",
+    "3m": "3m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "1h": "1H",
+    "2h": "2H",
+    "4h": "4H",
+    "6h": "6H",
+    "12h": "12H",
+    "1d": "1D",
+}
 
-    if response.status_code != 200:
-        return {
-            "error": "Bybit API error",
+
+def _okx_symbol(symbol: str) -> str:
+    """Convert BTCUSDT-style symbols to OKX perpetual swap instruments."""
+    clean = symbol.upper().replace("/", "").replace("-", "")
+    if clean.endswith("USDT"):
+        base = clean[:-4]
+        return f"{base}-USDT-SWAP"
+    return clean
+
+
+def _get_candles(symbol: str, interval: str, limit: int = 250):
+    inst_id = _okx_symbol(symbol)
+    bar = INTERVAL_MAP.get(interval, "1H")
+
+    params = {
+        "instId": inst_id,
+        "bar": bar,
+        "limit": min(max(limit, 200), 300),
+    }
+    headers = {"User-Agent": "SmartOTC-AI/1.0"}
+
+    try:
+        response = requests.get(
+            OKX_BASE_URL,
+            params=params,
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return None, {"error": "OKX request failed", "details": str(exc)}
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None, {
+            "error": "OKX returned non-JSON response",
             "status": response.status_code,
-            "body": response.text
+            "body": response.text[:500],
         }
 
-    response = response.json()
+    if payload.get("code") != "0":
+        return None, {
+            "error": "OKX API error",
+            "code": payload.get("code"),
+            "message": payload.get("msg", "Unknown OKX error"),
+            "instrument": inst_id,
+        }
 
-    if response.get("retCode") != 0:
-        return {"error": response}
+    rows = payload.get("data") or []
+    if not rows:
+        return None, {
+            "error": "No candle data returned by OKX",
+            "instrument": inst_id,
+            "interval": bar,
+        }
 
-    candles = response["result"]["list"]
+    # OKX returns newest candles first. Keep chronological order for indicators.
+    rows = list(reversed(rows))
 
-    df = pd.DataFrame(candles, columns=[
-        "time",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "turnover"
-    ])
+    parsed = []
+    for row in rows:
+        if len(row) < 9:
+            continue
+        parsed.append(
+            {
+                "time": int(row[0]),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+                "confirm": str(row[8]),
+            }
+        )
 
-    df = df.iloc[:, :6]
+    # Exclude the currently forming candle so indicators are based on confirmed data.
+    parsed = [row for row in parsed if row["confirm"] == "1"]
 
-    df.columns = [
-            "time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
+    if len(parsed) < 200:
+        return None, {
+            "error": "Insufficient candle data",
+            "received": len(parsed),
+            "required": 200,
+            "instrument": inst_id,
+        }
 
-    df = df.astype({
-            "open": float,
-            "high": float,
-            "low": float,
-            "close": float,
-            "volume": float,
-        })
+    return parsed, None
 
+
+def analyze(symbol="BTCUSDT", interval="1h"):
+    candles, error = _get_candles(symbol, interval)
+    if error:
+        return error
+
+    df = pd.DataFrame(candles)
+    df = df.drop(columns=["confirm"], errors="ignore")
+
+    # Indicators used by the original project, with additional filters to
+    # reduce weak/contradictory signals.
     df["ema20"] = ta.trend.ema_indicator(df["close"], window=20)
     df["ema50"] = ta.trend.ema_indicator(df["close"], window=50)
     df["ema200"] = ta.trend.ema_indicator(df["close"], window=200)
-
     df["rsi"] = ta.momentum.rsi(df["close"], window=14)
 
-    macd = ta.trend.MACD(df["close"])
+    macd = ta.trend.MACD(df["close"], window_slow=26, window_fast=12, window_sign=9)
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
+    df["atr"] = ta.volatility.average_true_range(
+        df["high"], df["low"], df["close"], window=14
+    )
 
-    df = df.iloc[::-1].reset_index(drop=True)
+    # Drop incomplete indicator rows before evaluating the latest candle.
+    df = df.dropna().reset_index(drop=True)
+    if len(df) < 2:
+        return {"error": "Not enough data after indicator calculation"}
+
     last = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    signal = "WAIT"
-    trend = "SIDEWAYS"
     score = 0
 
-    if last["ema20"] > last["ema50"]:
-            score += 20
+    # Trend structure: strongest weight.
+    bullish_trend = last["ema20"] > last["ema50"] > last["ema200"]
+    bearish_trend = last["ema20"] < last["ema50"] < last["ema200"]
 
-    if last["ema50"] > last["ema200"]:
-            score += 20
+    if bullish_trend:
+        score += 30
+    elif bearish_trend:
+        score -= 30
 
-    if 50 <= last["rsi"] <= 65:
-            score += 15
-
-    elif 35 <= last["rsi"] < 50:
-            score += 10
-
-    if last["macd"] > last["macd_signal"]:
-            score += 20
-
+    # Price location relative to EMA20.
     if last["close"] > last["ema20"]:
-            score += 15
+        score += 10
+    elif last["close"] < last["ema20"]:
+        score -= 10
 
-    score = min(score, 100)
+    # RSI: avoid chasing extreme conditions.
+    if 50 <= last["rsi"] <= 65:
+        score += 15
+    elif 35 <= last["rsi"] < 50:
+        score -= 5
+    elif 65 < last["rsi"] <= 75:
+        score += 5
+    elif last["rsi"] < 30:
+        score += 5
+    elif last["rsi"] > 75:
+        score -= 10
 
-    if (
-            last["ema20"] > last["ema50"]
-            and 45 <= last["rsi"] <= 70
-            and last["macd"] > last["macd_signal"]
-        ):
-            signal = "BUY"
+    # MACD direction and crossover confirmation.
+    macd_bull = last["macd"] > last["macd_signal"]
+    macd_bear = last["macd"] < last["macd_signal"]
+    macd_cross_up = last["macd"] > last["macd_signal"] and prev["macd"] <= prev["macd_signal"]
+    macd_cross_down = last["macd"] < last["macd_signal"] and prev["macd"] >= prev["macd_signal"]
 
-    elif (
-            last["ema20"] < last["ema50"]
-            and 30 <= last["rsi"] <= 55
-            and last["macd"] < last["macd_signal"]
-        ):
-            signal = "SELL"
+    if macd_bull:
+        score += 15
+    elif macd_bear:
+        score -= 15
 
-    if last["ema20"] > last["ema50"] > last["ema200"]:
-            trend = "BULLISH"
+    if macd_cross_up:
+        score += 5
+    elif macd_cross_down:
+        score -= 5
 
-    elif last["ema20"] < last["ema50"] < last["ema200"]:
-            trend = "BEARISH"
+    # Signal thresholds deliberately require confirmation.
+    if score >= 60 and not (last["rsi"] > 75):
+        signal = "BUY"
+    elif score <= -60 and not (last["rsi"] < 25):
+        signal = "SELL"
+    else:
+        signal = "WAIT"
 
-    trade_time = {
-            "1m": "2-3 min",
-            "5m": "10-15 min",
-            "15m": "20-40 min",
-            "1h": "2-4 h",
-            "4h": "6-12 h",
-            "1d": "1-3 days",
-        }.get(interval, "-")
+    if bullish_trend:
+        trend = "UPTREND"
+    elif bearish_trend:
+        trend = "DOWNTREND"
+    else:
+        trend = "SIDEWAYS"
 
+    # Keep the original response keys and add useful fields without breaking callers.
     return {
-            "price": round(last["close"], 2),
-            "ema20": round(last["ema20"], 2),
-            "ema50": round(last["ema50"], 2),
-            "ema200": round(last["ema200"], 2),
-            "rsi": round(last["rsi"], 2),
-            "macd": round(last["macd"], 2),
-            "macd_signal": round(last["macd_signal"], 2),
-            "signal": signal,
-            "symbol": symbol,
-            "interval": interval,
-            "score": score,
-            "trend": trend,
-            "trade_time": trade_time,
-        }
+        "signal": signal,
+        "trend": trend,
+        "score": int(score),
+        "price": round(float(last["close"]), 8),
+        "ema20": round(float(last["ema20"]), 8),
+        "ema50": round(float(last["ema50"]), 8),
+        "ema200": round(float(last["ema200"]), 8),
+        "rsi": round(float(last["rsi"]), 2),
+        "macd": round(float(last["macd"]), 8),
+        "macd_signal": round(float(last["macd_signal"]), 8),
+        "atr": round(float(last["atr"]), 8),
+        "interval": interval,
+        "symbol": symbol.upper(),
+        "source": "OKX",
+    }
