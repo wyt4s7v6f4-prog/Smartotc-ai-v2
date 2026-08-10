@@ -6,4 +6,3 @@ pydantic-settings
 pandas
 numpy
 ta
-jinja2
