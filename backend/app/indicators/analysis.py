@@ -199,11 +199,24 @@ def analyze(symbol="BTCUSDT", interval="1h"):
     else:
         trend = "SIDEWAYS"
 
-    # Keep the original response keys and add useful fields without breaking callers.
+    # Live-entry fields:
+    # BUY/SELL means the signal is actionable immediately when returned.
+    # WAIT means there is no confirmed entry right now.
+    entry = "NOW" if signal in {"BUY", "SELL"} else None
+    trade_time = "NOW" if signal in {"BUY", "SELL"} else None
+
+    # Keep compatibility with existing callers and expose a simple probability
+    # estimate derived from the strategy score. This is NOT a win-rate guarantee.
+    probability = min(95, max(50, 50 + int(abs(score) * 0.75)))
+
     return {
         "signal": signal,
         "trend": trend,
         "score": int(score),
+        "probability": probability,
+        "entry": entry,
+        "entry_now": signal in {"BUY", "SELL"},
+        "trade_time": trade_time,
         "price": round(float(last["close"]), 8),
         "ema20": round(float(last["ema20"]), 8),
         "ema50": round(float(last["ema50"]), 8),
