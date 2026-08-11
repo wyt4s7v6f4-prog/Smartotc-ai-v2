@@ -94,6 +94,26 @@ button:disabled{
     margin:6px 0;
 }
 
+.result-box{
+    margin:16px auto 6px;
+    padding:12px;
+    border-radius:12px;
+    background:#0f172a;
+    font-size:18px;
+    font-weight:800;
+}
+
+.result-win{color:#00ff88;}
+.result-loss{color:#ff4444;}
+.result-draw{color:#fbbf24;}
+.result-open{color:#60a5fa;}
+
+.result-detail{
+    font-size:15px;
+    color:#cbd5e1;
+    line-height:1.5;
+}
+
 .item{
     margin:8px;
     font-size:20px;
@@ -231,6 +251,11 @@ button:disabled{
         <span id="time">-</span>
     </div>
 
+    <div id="resultBox" class="result-box" style="display:none;">
+        <div id="result"></div>
+        <div id="resultDetail" class="result-detail"></div>
+    </div>
+
     <div class="note">
         Signal is checked automatically. In 30s mode the entry clock runs on 30-second boundaries;
         FX/OTC indicators use the latest available 1-minute feed. For other intervals,
@@ -247,6 +272,12 @@ let pollTimer = null;
 let countdownTimer = null;
 let lastData = null;
 let running = false;
+
+let pendingTrade = null;
+let activeTrade = null;
+let lastCompletedEntryTs = null;
+let lastResult = null;
+let finalCheckPending = false;
 
 const $ = id => document.getElementById(id);
 
@@ -279,8 +310,32 @@ function setSignalClass(signal){
     }
 }
 
-function clearDisplay(message="WAIT"){
+function durationLabel(data){
+    if(data?.trade_duration) return data.trade_duration;
+    const seconds = Number(data?.duration_seconds);
+    if(Number.isFinite(seconds) && seconds > 0){
+        return seconds + "s";
+    }
+    const interval = data?.interval || selectedInterval();
+    return interval;
+}
+
+function hideResult(){
+    $("resultBox").style.display = "none";
+    $("result").innerHTML = "";
+    $("resultDetail").innerHTML = "";
+}
+
+function showResult(status, detail, cls){
+    $("resultBox").style.display = "block";
+    $("result").className = cls || "";
+    $("result").innerHTML = "📊 RESULT: " + status;
+    $("resultDetail").innerHTML = detail || "";
+}
+
+function clearDisplay(message="WAIT", clearResult=true){
     updateOTCBadge();
+
     $("signal").innerHTML = message;
     setSignalClass("WAIT");
     $("countdown").innerHTML = "";
@@ -291,14 +346,245 @@ function clearDisplay(message="WAIT"){
     $("rsi").innerHTML = "-";
     $("probability").innerHTML = "-";
     $("time").innerHTML = "-";
+
+    if(clearResult){
+        lastResult = null;
+        hideResult();
+    }
 }
 
-function renderData(data){
+function renderMetrics(data){
+    $("price").innerHTML = data.price ?? "-";
+    $("ema20").innerHTML = data.ema20 ?? "-";
+    $("ema50").innerHTML = data.ema50 ?? "-";
+    $("rsi").innerHTML = data.rsi ?? "-";
+
+    const probability = data.probability ?? "-";
+    $("probability").innerHTML = probability + " %";
+}
+
+function startTrade(data){
+    const direction = String(data.raw_signal || data.signal || "").toUpperCase();
+
+    if(!["BUY","SELL"].includes(direction)) return;
+    if(activeTrade) return;
+
+    const entryTs = Number(
+        data.entry_ts ??
+        Math.floor(Date.now() / 1000)
+    );
+
+    if(lastCompletedEntryTs !== null &&
+       entryTs === lastCompletedEntryTs){
+        return;
+    }
+
+    const duration = Number(
+        data.duration_seconds ??
+        intervalToSeconds(data.interval)
+    );
+
+    const expiryTs = Number(
+        data.expiry_ts ??
+        (entryTs + duration)
+    );
+
+    activeTrade = {
+        direction: direction,
+        symbol: data.symbol || selectedSymbol(),
+        interval: data.interval || selectedInterval(),
+        entryTs: entryTs,
+        expiryTs: expiryTs,
+        duration: duration,
+        entryPrice: Number(data.price),
+        probability: data.probability
+    };
+
+    pendingTrade = null;
+    lastResult = null;
+    finalCheckPending = false;
+    hideResult();
+
+    renderActiveTrade(data);
+}
+
+function intervalToSeconds(interval){
+    const map = {
+        "30s":30,
+        "1m":60,
+        "3m":180,
+        "5m":300,
+        "15m":900,
+        "30m":1800,
+        "1h":3600,
+        "2h":7200,
+        "4h":14400,
+        "6h":21600,
+        "12h":43200,
+        "1d":86400
+    };
+    return map[interval] || 60;
+}
+
+function renderActiveTrade(data){
+    if(!activeTrade) return;
+
+    renderMetrics(data);
+
+    const remaining = Math.max(
+        0,
+        Math.ceil(activeTrade.expiryTs - Date.now() / 1000)
+    );
+
+    const duration = activeTrade.duration + "s";
+    const currentPrice = Number(data.price);
+
+    $("signal").innerHTML =
+        activeTrade.direction + " — TRADE OPEN";
+
+    $("countdown").innerHTML =
+        "⏳ " + remaining + "s";
+
+    $("entry").innerHTML =
+        "⚡ ENTRY: NOW";
+
+    $("time").innerHTML =
+        duration + " • expires in " + remaining + "s";
+
+    setSignalClass(activeTrade.direction);
+
+    showResult(
+        "OPEN",
+        "Entry price: " + formatPrice(activeTrade.entryPrice) +
+        " • Current price: " + formatPrice(currentPrice) +
+        " • Duration: " + duration,
+        "result-open"
+    );
+}
+
+function formatPrice(value){
+    const n = Number(value);
+    if(!Number.isFinite(n)) return "-";
+
+    if(Math.abs(n) >= 100){
+        return n.toFixed(2);
+    }
+    if(Math.abs(n) >= 1){
+        return n.toFixed(5);
+    }
+    return n.toFixed(6);
+}
+
+function finalizeTrade(data){
+    if(!activeTrade) return;
+
+    const trade = activeTrade;
+    const exitPrice = Number(data?.price);
+
+    if(!Number.isFinite(exitPrice)){
+        return;
+    }
+
+    let status = "DRAW";
+    let cls = "result-draw";
+
+    if(trade.direction === "BUY"){
+        if(exitPrice > trade.entryPrice){
+            status = "WIN";
+            cls = "result-win";
+        }else if(exitPrice < trade.entryPrice){
+            status = "LOSS";
+            cls = "result-loss";
+        }
+    }else{
+        if(exitPrice < trade.entryPrice){
+            status = "WIN";
+            cls = "result-win";
+        }else if(exitPrice > trade.entryPrice){
+            status = "LOSS";
+            cls = "result-loss";
+        }
+    }
+
+    const movement = exitPrice - trade.entryPrice;
+    const signedMovement =
+        (movement >= 0 ? "+" : "") + formatPrice(movement);
+
+    lastCompletedEntryTs = trade.entryTs;
+
+    lastResult = {
+        status: status,
+        direction: trade.direction,
+        entryPrice: trade.entryPrice,
+        exitPrice: exitPrice,
+        duration: trade.duration,
+        movement: movement
+    };
+
+    activeTrade = null;
+    pendingTrade = null;
+
+    $("signal").innerHTML = "📊 " + status;
+    setSignalClass(
+        status === "WIN" ? "BUY" :
+        status === "LOSS" ? "SELL" : "WAIT"
+    );
+
+    $("countdown").innerHTML = "";
+    $("entry").innerHTML =
+        "⚡ " + trade.direction + " • TRADE CLOSED";
+    $("time").innerHTML =
+        trade.duration + "s";
+
+    showResult(
+        status,
+        "Direction: " + trade.direction +
+        " • Entry: " + formatPrice(trade.entryPrice) +
+        " • Exit: " + formatPrice(exitPrice) +
+        " • Movement: " + signedMovement +
+        " • Duration: " + trade.duration + "s" +
+        (isOTC() ? " • OTC result uses FX proxy price" : ""),
+        cls
+    );
+}
+
+function updateActiveClock(){
+    if(!activeTrade) return;
+
+    const remaining = Math.ceil(
+        activeTrade.expiryTs - Date.now() / 1000
+    );
+
+    if(remaining > 0){
+        $("countdown").innerHTML = "⏳ " + remaining + "s";
+        $("time").innerHTML =
+            activeTrade.duration + "s • expires in " + remaining + "s";
+        return;
+    }
+
+    $("countdown").innerHTML = "🔎 RESULT...";
+    $("time").innerHTML =
+        activeTrade.duration + "s • checking result...";
+
+    // Request the final price only once for this expiry.
+    if(!finalCheckPending){
+        finalCheckPending = true;
+        fetchAnalysis(true).finally(() => {
+            finalCheckPending = false;
+        });
+    }
+}
+
+function renderData(data, fromFinalCheck=false){
     lastData = data;
     updateOTCBadge();
 
     if(!data || data.error){
-        clearDisplay("ERROR");
+        if(activeTrade && !fromFinalCheck){
+            return false;
+        }
+
+        clearDisplay("ERROR", false);
         $("time").innerHTML =
             data?.details ||
             data?.message ||
@@ -307,34 +593,54 @@ function renderData(data){
         return false;
     }
 
-    $("price").innerHTML = data.price ?? "-";
-    $("ema20").innerHTML = data.ema20 ?? "-";
-    $("ema50").innerHTML = data.ema50 ?? "-";
-    $("rsi").innerHTML = data.rsi ?? "-";
+    renderMetrics(data);
 
-    const probability = data.probability ?? "-";
-    $("probability").innerHTML = probability + " %";
-
-    const signal = data.signal;
-    const isTrade = signal === "BUY" || signal === "SELL";
-
-    if(data.entry_now === true && isTrade){
-        $("signal").innerHTML = signal + " — ENTRY NOW";
-        $("entry").innerHTML = "⚡ ENTRY: NOW";
-        $("countdown").innerHTML = "🚀 NOW";
-        $("time").innerHTML = "NOW";
-        setSignalClass(signal);
+    // If a trade is open, the new signal must not replace it.
+    if(activeTrade){
+        if(Date.now() / 1000 >= activeTrade.expiryTs){
+            finalizeTrade(data);
+        }else{
+            renderActiveTrade(data);
+        }
         return true;
     }
 
+    const signal = String(data.signal || "").toUpperCase();
+    const rawSignal = String(
+        data.raw_signal || data.signal || ""
+    ).toUpperCase();
+
+    const isTrade =
+        rawSignal === "BUY" ||
+        rawSignal === "SELL";
+
+    // A confirmed entry starts the actual trade timer.
+    if(data.entry_now === true && isTrade){
+        startTrade(data);
+        return true;
+    }
+
+    // A fresh setup cancels the old result display.
     if(data.pre_entry === true && isTrade){
+        lastResult = null;
+        hideResult();
+
         const seconds = Math.max(
             1,
             Number(data.entry_countdown ?? 10)
         );
 
+        pendingTrade = {
+            direction: rawSignal,
+            entryTs: Number(data.entry_ts ?? data.next_candle_ts),
+            duration: Number(
+                data.duration_seconds ??
+                intervalToSeconds(data.interval)
+            )
+        };
+
         $("signal").innerHTML =
-            signal + " — ENTRY IN " + seconds + "s";
+            rawSignal + " — ENTRY IN " + seconds + "s";
 
         $("entry").innerHTML =
             "⚡ ENTRY IN " + seconds + "s";
@@ -343,9 +649,10 @@ function renderData(data){
             "⏱️ " + seconds;
 
         $("time").innerHTML =
-            "IN " + seconds + "s";
+            "OPEN FOR " + durationLabel(data) +
+            " • ENTRY IN " + seconds + "s";
 
-        setSignalClass(signal);
+        setSignalClass(rawSignal);
         return true;
     }
 
@@ -353,13 +660,33 @@ function renderData(data){
     $("entry").innerHTML = "";
     $("countdown").innerHTML = "";
 
-    $("time").innerHTML = data.trade_time ?? "Waiting for entry window";
+    // Even while waiting, show how long the eventual trade will be.
+    $("time").innerHTML =
+        "OPEN FOR " + durationLabel(data);
 
     setSignalClass("WAIT");
+
+    // Keep the most recent result visible until a new signal appears.
+    if(lastResult){
+        const cls =
+            lastResult.status === "WIN" ? "result-win" :
+            lastResult.status === "LOSS" ? "result-loss" :
+            "result-draw";
+
+        showResult(
+            lastResult.status,
+            "Direction: " + lastResult.direction +
+            " • Entry: " + formatPrice(lastResult.entryPrice) +
+            " • Exit: " + formatPrice(lastResult.exitPrice) +
+            " • Duration: " + lastResult.duration + "s",
+            cls
+        );
+    }
+
     return true;
 }
 
-async function fetchAnalysis(){
+async function fetchAnalysis(fromFinalCheck=false){
     const symbol = selectedSymbol();
     const interval = selectedInterval();
 
@@ -372,16 +699,21 @@ async function fetchAnalysis(){
         const data = await r.json();
 
         if(!r.ok || data.error){
-            renderData(data);
+            renderData(data, fromFinalCheck);
             return null;
         }
 
-        renderData(data);
+        renderData(data, fromFinalCheck);
         return data;
 
     }catch(error){
-        clearDisplay("ERROR");
-        $("time").innerHTML = error.message || "Network error";
+        if(activeTrade && !fromFinalCheck){
+            return null;
+        }
+
+        clearDisplay("ERROR", false);
+        $("time").innerHTML =
+            error.message || "Network error";
         return null;
     }
 }
@@ -401,11 +733,17 @@ function stopTimers(){
 function scheduleNextPoll(){
     if(!running) return;
 
-    // Normal mode: refresh every 5 seconds.
-    // During the final 10-second window, refresh every second.
-    const seconds = Number(lastData?.entry_countdown ?? 999);
+    let delay = 5000;
 
-    const delay = seconds <= 12 ? 1000 : 5000;
+    if(activeTrade){
+        delay = 1000;
+    }else{
+        const seconds = Number(
+            lastData?.entry_countdown ?? 999
+        );
+
+        delay = seconds <= 12 ? 1000 : 5000;
+    }
 
     pollTimer = setTimeout(async () => {
         await fetchAnalysis();
@@ -419,7 +757,15 @@ function startLocalCountdown(){
     }
 
     countdownTimer = setInterval(() => {
-        if(!running || !lastData?.next_candle_ts){
+        if(!running) return;
+
+        // During a live trade, count down to expiry.
+        if(activeTrade){
+            updateActiveClock();
+            return;
+        }
+
+        if(!lastData?.next_candle_ts){
             return;
         }
 
@@ -427,24 +773,50 @@ function startLocalCountdown(){
         const remaining = Math.ceil(
             Number(lastData.next_candle_ts) - now
         );
-        const signal = lastData.raw_signal || lastData.signal;
-        const isTrade = signal === "BUY" || signal === "SELL";
+
+        const signal =
+            lastData.raw_signal ||
+            lastData.signal;
+
+        const isTrade =
+            signal === "BUY" ||
+            signal === "SELL";
 
         if(isTrade && remaining > 0 && remaining <= 10){
-            // This is the actual 10-second pre-entry countdown.
             lastData.pre_entry = true;
             lastData.entry_countdown = remaining;
             lastData.signal = signal;
 
-            $("countdown").innerHTML = "⏱️ " + remaining;
-            $("entry").innerHTML = "⚡ ENTRY IN " + remaining + "s";
-            $("time").innerHTML = "IN " + remaining + "s";
-            $("signal").innerHTML = signal + " — ENTRY IN " + remaining + "s";
+            pendingTrade = {
+                direction: signal,
+                entryTs: Number(
+                    lastData.entry_ts ??
+                    lastData.next_candle_ts
+                ),
+                duration: Number(
+                    lastData.duration_seconds ??
+                    intervalToSeconds(lastData.interval)
+                )
+            };
+
+            $("countdown").innerHTML =
+                "⏱️ " + remaining;
+
+            $("entry").innerHTML =
+                "⚡ ENTRY IN " + remaining + "s";
+
+            $("time").innerHTML =
+                "OPEN FOR " + durationLabel(lastData) +
+                " • ENTRY IN " + remaining + "s";
+
+            $("signal").innerHTML =
+                signal + " — ENTRY IN " + remaining + "s";
+
             setSignalClass(signal);
         }
 
         if(remaining <= 0){
-            // Never invent ENTRY NOW locally: ask the backend to confirm it.
+            // Never invent ENTRY NOW locally: backend confirms it.
             $("countdown").innerHTML = "🔎 CHECKING...";
             fetchAnalysis();
         }
@@ -454,6 +826,12 @@ function startLocalCountdown(){
 async function startAnalysis(){
     stopTimers();
     running = true;
+
+    pendingTrade = null;
+    activeTrade = null;
+    lastCompletedEntryTs = null;
+    lastResult = null;
+    hideResult();
 
     $("analyzeBtn").disabled = true;
     $("signal").innerHTML = "ANALYZING...";
@@ -471,11 +849,14 @@ $("symbol").addEventListener("change", () => {
     if(running){
         stopTimers();
         startAnalysis();
+    }else{
+        updateOTCBadge();
     }
 });
 
 $("interval").addEventListener("change", () => {
     updateOTCBadge();
+
     if(running){
         stopTimers();
         startAnalysis();
