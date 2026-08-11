@@ -2,18 +2,19 @@
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SmartOTC AI</title>
 
 <style>
 body{
     background:#0f172a;
     color:white;
-    font-family:Arial;
+    font-family:Arial,sans-serif;
     text-align:center;
 }
 
 .container{
-    width:420px;
+    width:min(420px,92vw);
     margin:auto;
     margin-top:40px;
 }
@@ -34,6 +35,11 @@ button{
     background:#22c55e;
     color:white;
     cursor:pointer;
+}
+
+button:disabled{
+    opacity:.65;
+    cursor:wait;
 }
 
 .card{
@@ -61,9 +67,21 @@ button{
     font-weight:bold;
 }
 
+.countdown{
+    font-size:34px;
+    font-weight:bold;
+    margin:8px 0;
+}
+
 .item{
     margin:8px;
     font-size:20px;
+}
+
+.note{
+    margin-top:16px;
+    color:#94a3b8;
+    font-size:14px;
 }
 </style>
 
@@ -76,7 +94,6 @@ button{
 <h1>SmartOTC AI</h1>
 
 <select id="symbol">
-
     <optgroup label="Crypto">
         <option>BTCUSDT</option>
         <option>ETHUSDT</option>
@@ -92,8 +109,7 @@ button{
         <option>LTCUSDT</option>
     </optgroup>
 
-<optgroup label="OTC">
-
+    <optgroup label="OTC">
         <option>EUR/USD OTC</option>
         <option>GBP/USD OTC</option>
         <option>USD/JPY OTC</option>
@@ -106,8 +122,8 @@ button{
         <option>EUR/CHF OTC</option>
         <option>GBP/JPY OTC</option>
         <option>AUD/JPY OTC</option>
+    </optgroup>
 
-</optgroup>
     <optgroup label="Forex">
         <option>EUR/USD</option>
         <option>GBP/USD</option>
@@ -122,134 +138,296 @@ button{
         <option>XAU/USD</option>
         <option>XAG/USD</option>
     </optgroup>
-
 </select>
 
 <select id="interval">
-<option>10s</option>
-<option>15s</option>
-<option>30s</option>
-
-<option>1m</option>
-<option>5m</option>
-<option>15m</option>
-<option>30m</option>
-<option>1h</option>
-<option>4h</option>
-<option>1d</option>
+    <option>1m</option>
+    <option>5m</option>
+    <option>15m</option>
+    <option>30m</option>
+    <option>1h</option>
+    <option>4h</option>
+    <option>1d</option>
 </select>
 
 <br>
 
-<button onclick="analyze()">Analyze</button>
+<button id="analyzeBtn" onclick="startAnalysis()">Analyze</button>
 
 <div class="card">
 
-<div id="signal" class="wait">WAIT</div>
+    <div id="signal" class="wait">WAIT</div>
 
-<div id="entry" class="item" style="font-weight:bold;"></div>
+    <div id="countdown" class="countdown"></div>
 
-<div class="item">
-💰 Price:
-<span id="price">-</span>
-</div>
+    <div id="entry" class="item" style="font-weight:bold;"></div>
 
-<div class="item">
-📈 RSI:
-<span id="rsi">-</span>
-</div>
+    <div class="item">
+        💰 Price:
+        <span id="price">-</span>
+    </div>
 
-<div class="item">
-📊 EMA20:
-<span id="ema20">-</span>
-</div>
+    <div class="item">
+        📈 RSI:
+        <span id="rsi">-</span>
+    </div>
 
-<div class="item">
-📊 EMA50:
-<span id="ema50">-</span>
-</div>
+    <div class="item">
+        📊 EMA20:
+        <span id="ema20">-</span>
+    </div>
 
-<div class="item">
-🎯 Probability:
-<span id="probability">-</span>
-</div>
+    <div class="item">
+        📊 EMA50:
+        <span id="ema50">-</span>
+    </div>
 
-<div class="item">
-⏳ Trade Time:
-<span id="time">-</span>
-</div>
+    <div class="item">
+        🎯 Probability:
+        <span id="probability">-</span>
+    </div>
+
+    <div class="item">
+        ⏳ Trade Time:
+        <span id="time">-</span>
+    </div>
+
+    <div class="note">
+        Signal is checked automatically. Entry alert is shown only during
+        the final 10 seconds before the next candle.
+    </div>
 
 </div>
 
 </div>
 
 <script>
+let pollTimer = null;
+let countdownTimer = null;
+let lastData = null;
+let running = false;
 
-async function analyze(){
+const $ = id => document.getElementById(id);
 
-let symbol=document.getElementById("symbol").value;
-let interval=document.getElementById("interval").value;
-
-let r=await fetch(`/analyze?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`);
-let data=await r.json();
-
-if (!r.ok || data.error) {
-    document.getElementById("signal").innerHTML = "ERROR";
-    document.getElementById("signal").className = "wait";
-    document.getElementById("entry").innerHTML = "";
-    document.getElementById("price").innerHTML = "-";
-    document.getElementById("ema20").innerHTML = "-";
-    document.getElementById("ema50").innerHTML = "-";
-    document.getElementById("rsi").innerHTML = "-";
-    document.getElementById("probability").innerHTML = "-";
-    document.getElementById("time").innerHTML = data.details || data.error || "Analysis failed";
-    return;
+function selectedInterval(){
+    return $("interval").value;
 }
 
-document.getElementById("price").innerHTML = data.price ?? "-";
-document.getElementById("ema20").innerHTML = data.ema20 ?? "-";
-document.getElementById("ema50").innerHTML = data.ema50 ?? "-";
-document.getElementById("rsi").innerHTML = data.rsi ?? "-";
-
-let probability = data.probability ?? "-";
-document.getElementById("probability").innerHTML = probability + " %";
-
-let time = data.trade_time ?? "";
-
-if (data.entry_now === true && (data.signal === "BUY" || data.signal === "SELL")) {
-    time = "NOW";
+function selectedSymbol(){
+    return $("symbol").value;
 }
 
-document.getElementById("time").innerHTML = time;
+function setSignalClass(signal){
+    const el = $("signal");
+    el.className = "";
 
-const entryEl = document.getElementById("entry");
-if (data.entry_now === true && (data.signal === "BUY" || data.signal === "SELL")) {
-    entryEl.innerHTML = "⚡ ENTRY: NOW";
-} else {
-    entryEl.innerHTML = "";
+    if(signal === "BUY"){
+        el.classList.add("buy");
+    }else if(signal === "SELL"){
+        el.classList.add("sell");
+    }else{
+        el.classList.add("wait");
+    }
 }
 
-let signal = document.getElementById("signal");
-
-if (data.entry_now === true && (data.signal === "BUY" || data.signal === "SELL")) {
-    signal.innerHTML = data.signal + " — ENTRY NOW";
-} else {
-    signal.innerHTML = data.signal;
+function clearDisplay(message="WAIT"){
+    $("signal").innerHTML = message;
+    setSignalClass("WAIT");
+    $("countdown").innerHTML = "";
+    $("entry").innerHTML = "";
+    $("price").innerHTML = "-";
+    $("ema20").innerHTML = "-";
+    $("ema50").innerHTML = "-";
+    $("rsi").innerHTML = "-";
+    $("probability").innerHTML = "-";
+    $("time").innerHTML = "-";
 }
 
-signal.className="";
+function renderData(data){
+    lastData = data;
 
-if(data.signal=="BUY")
-signal.classList.add("buy");
+    if(!data || data.error){
+        clearDisplay("ERROR");
+        $("time").innerHTML =
+            data?.details ||
+            data?.message ||
+            data?.error ||
+            "Analysis failed";
+        return false;
+    }
 
-if(data.signal=="SELL")
-signal.classList.add("sell");
+    $("price").innerHTML = data.price ?? "-";
+    $("ema20").innerHTML = data.ema20 ?? "-";
+    $("ema50").innerHTML = data.ema50 ?? "-";
+    $("rsi").innerHTML = data.rsi ?? "-";
 
-if(data.signal=="WAIT")
-signal.classList.add("wait");
+    const probability = data.probability ?? "-";
+    $("probability").innerHTML = probability + " %";
 
+    const signal = data.signal;
+    const isTrade = signal === "BUY" || signal === "SELL";
+
+    if(data.entry_now === true && isTrade){
+        $("signal").innerHTML = signal + " — ENTRY NOW";
+        $("entry").innerHTML = "⚡ ENTRY: NOW";
+        $("countdown").innerHTML = "🚀 NOW";
+        $("time").innerHTML = "NOW";
+        setSignalClass(signal);
+        return true;
+    }
+
+    if(data.pre_entry === true && isTrade){
+        const seconds = Math.max(
+            1,
+            Number(data.entry_countdown ?? 10)
+        );
+
+        $("signal").innerHTML =
+            signal + " — ENTRY IN " + seconds + "s";
+
+        $("entry").innerHTML =
+            "⚡ ENTRY IN " + seconds + "s";
+
+        $("countdown").innerHTML =
+            "⏱️ " + seconds;
+
+        $("time").innerHTML =
+            "IN " + seconds + "s";
+
+        setSignalClass(signal);
+        return true;
+    }
+
+    $("signal").innerHTML = "WAIT";
+    $("entry").innerHTML = "";
+    $("countdown").innerHTML = "";
+
+    $("time").innerHTML = data.trade_time ?? "Waiting for entry window";
+
+    setSignalClass("WAIT");
+    return true;
 }
 
+async function fetchAnalysis(){
+    const symbol = selectedSymbol();
+    const interval = selectedInterval();
+
+    try{
+        const r = await fetch(
+            `/analyze?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`,
+            {cache:"no-store"}
+        );
+
+        const data = await r.json();
+
+        if(!r.ok || data.error){
+            renderData(data);
+            return null;
+        }
+
+        renderData(data);
+        return data;
+
+    }catch(error){
+        clearDisplay("ERROR");
+        $("time").innerHTML = error.message || "Network error";
+        return null;
+    }
+}
+
+function stopTimers(){
+    if(pollTimer){
+        clearTimeout(pollTimer);
+        pollTimer = null;
+    }
+
+    if(countdownTimer){
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+    }
+}
+
+function scheduleNextPoll(){
+    if(!running) return;
+
+    // Normal mode: refresh every 5 seconds.
+    // During the final 10-second window, refresh every second.
+    const seconds = Number(lastData?.entry_countdown ?? 999);
+
+    const delay = seconds <= 12 ? 1000 : 5000;
+
+    pollTimer = setTimeout(async () => {
+        await fetchAnalysis();
+        scheduleNextPoll();
+    }, delay);
+}
+
+function startLocalCountdown(){
+    if(countdownTimer){
+        clearInterval(countdownTimer);
+    }
+
+    countdownTimer = setInterval(() => {
+        if(!running || !lastData?.next_candle_ts){
+            return;
+        }
+
+        const now = Date.now() / 1000;
+        const remaining = Math.ceil(
+            Number(lastData.next_candle_ts) - now
+        );
+
+        if(
+            lastData.pre_entry === true &&
+            (lastData.signal === "BUY" || lastData.signal === "SELL") &&
+            remaining > 0 &&
+            remaining <= 10
+        ){
+            $("countdown").innerHTML = "⏱️ " + remaining;
+            $("entry").innerHTML =
+                "⚡ ENTRY IN " + remaining + "s";
+            $("time").innerHTML = "IN " + remaining + "s";
+            $("signal").innerHTML =
+                lastData.signal + " — ENTRY IN " + remaining + "s";
+        }
+
+        if(remaining <= 0){
+            // Do not invent an entry. Ask the backend to confirm it.
+            $("countdown").innerHTML = "🔎 CHECKING...";
+            fetchAnalysis();
+        }
+    }, 250);
+}
+
+async function startAnalysis(){
+    stopTimers();
+    running = true;
+
+    $("analyzeBtn").disabled = true;
+    $("signal").innerHTML = "ANALYZING...";
+    $("signal").className = "wait";
+
+    await fetchAnalysis();
+
+    $("analyzeBtn").disabled = false;
+
+    startLocalCountdown();
+    scheduleNextPoll();
+}
+
+$("symbol").addEventListener("change", () => {
+    if(running){
+        stopTimers();
+        startAnalysis();
+    }
+});
+
+$("interval").addEventListener("change", () => {
+    if(running){
+        stopTimers();
+        startAnalysis();
+    }
+});
 </script>
 
 </body>
