@@ -25,7 +25,7 @@ def get_analysis(
 ):
     # Route ALL symbols through the unified analyzer. This is important for
     # OTC/Forex because the analyzer adds the same 10-second pre-entry timer
-    # and uses the project's TwelveData FX proxy with rate-limit protection.
+    # and uses the authenticated Quotex feed for OTC symbols.
     return analyze(symbol, interval, mode=mode)
 
 
