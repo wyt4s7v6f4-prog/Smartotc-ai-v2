@@ -176,38 +176,60 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
 
     last = df.iloc[-1]
 
+    # Directional scoring is deliberately less brittle than the old
+    # all-or-nothing rules. A setup can still be bearish when EMA20 is only
+    # marginally above EMA50 if price is below both averages and RSI/momentum
+    # confirm the move. This prevents the AUTO mode from getting stuck on
+    # NO STRONG SIGNAL for otherwise clear directional setups.
     score = 0
 
     if last["ema20"] > last["ema50"]:
         score += 25
-    else:
+    elif last["ema20"] < last["ema50"]:
         score -= 25
+
+    if last["close"] > max(last["ema20"], last["ema50"]):
+        score += 25
+    elif last["close"] < min(last["ema20"], last["ema50"]):
+        score -= 25
+    elif last["close"] > last["ema20"]:
+        score += 10
+    else:
+        score -= 10
 
     if last["macd"] > last["macd_signal"]:
-        score += 25
-    else:
-        score -= 25
+        score += 20
+    elif last["macd"] < last["macd_signal"]:
+        score -= 20
 
-    if 45 <= last["rsi"] <= 70:
-        score += 25
-    elif last["rsi"] < 45:
-        score -= 10
+    if 55 <= last["rsi"] <= 70:
+        score += 20
+    elif 30 <= last["rsi"] < 45:
+        score -= 20
     elif last["rsi"] > 70:
-        score -= 10
+        score += 8
+    elif last["rsi"] < 30:
+        score -= 8
 
-    if last["close"] > last["ema20"]:
-        score += 25
-    else:
-        score -= 25
+    if len(df) >= 2:
+        delta = float(last["close"] - df.iloc[-2]["close"])
+        if delta > 0:
+            score += 10
+        elif delta < 0:
+            score -= 10
 
-    if score >= 50:
+    score = max(-100, min(100, int(score)))
+
+    # 45 is the minimum directional threshold for the proxy feed. AUTO mode
+    # applies an additional quality filter before opening a trade.
+    if score >= 45:
         signal = "BUY"
-    elif score <= -50:
+    elif score <= -45:
         signal = "SELL"
     else:
         signal = "WAIT"
 
-    probability = min(95, max(50, 50 + int(abs(score) * 0.45)))
+    probability = min(90, max(50, 50 + int(abs(score) * 0.40)))
 
     result = {
         "price": round(float(last["close"]), 5),
