@@ -116,6 +116,22 @@ button:disabled{
     line-height:1.5;
 }
 
+.analysis-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:8px;
+    margin:14px 0 8px;
+}
+.analysis-box{
+    background:#0f172a;
+    border-radius:12px;
+    padding:10px;
+    text-align:left;
+}
+.analysis-title{font-size:12px;color:#94a3b8;font-weight:800;text-transform:uppercase;}
+.analysis-value{font-size:18px;font-weight:900;margin-top:4px;}
+.analysis-detail{font-size:12px;color:#cbd5e1;line-height:1.4;margin-top:5px;}
+
 .item{
     margin:8px;
     font-size:20px;
@@ -244,6 +260,25 @@ button:disabled{
         <span id="time">-</span>
     </div>
 
+    <div class="analysis-grid">
+        <div class="analysis-box">
+            <div class="analysis-title">Technical Analysis</div>
+            <div id="technicalScore" class="analysis-value">-</div>
+            <div id="technicalDetail" class="analysis-detail">RSI • EMA • MACD • BB • Stochastic • ADX</div>
+        </div>
+        <div class="analysis-box">
+            <div class="analysis-title">Smart Money</div>
+            <div id="smartMoneyScore" class="analysis-value">-</div>
+            <div id="smartMoneyDetail" class="analysis-detail">Structure • Liquidity • OB • FVG</div>
+        </div>
+    </div>
+
+    <div class="analysis-box">
+        <div class="analysis-title">Market Structure</div>
+        <div id="marketStructure" class="analysis-value">-</div>
+        <div id="smartMoneyDetail2" class="analysis-detail">-</div>
+    </div>
+
     <div id="resultBox" class="result-box" style="display:none;">
         <div id="result"></div>
         <div id="resultDetail" class="result-detail"></div>
@@ -253,7 +288,7 @@ button:disabled{
         🤖 AUTO mode: choose the market and SmartOTC AI selects the trade duration automatically from 10s, 30s, 1m, 2m, 5m, 10m or 15m.
         Only stronger setups are issued (score ≥ 70 and calibrated probability ≥ 70%).
         Stronger setups use shorter expiries; qualified but weaker setups use longer expiries.
-        After a trade closes, press Next Signal to request the next setup. OTC/FX and crypto use the latest available 1-minute indicator feed.
+        After a trade closes, press Next Signal to request the next setup. Every new signal has a mandatory 10-second pre-entry countdown before the trade opens. OTC/FX and crypto use the latest available 1-minute indicator feed.
         OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
     </div>
 
@@ -351,6 +386,15 @@ function renderMetrics(data){
 
     const probability = data.probability ?? "-";
     $("probability").innerHTML = probability + " %";
+
+    const taScore = data.technical_score ?? "-";
+    const smcScore = data.smart_money_score ?? "-";
+    $("technicalScore").innerHTML = taScore === "-" ? "-" : (taScore > 0 ? "BULLISH " : taScore < 0 ? "BEARISH " : "NEUTRAL ") + Math.abs(taScore);
+    $("smartMoneyScore").innerHTML = smcScore === "-" ? "-" : (smcScore > 0 ? "BULLISH " : smcScore < 0 ? "BEARISH " : "MIXED ") + Math.abs(smcScore);
+    $("technicalDetail").innerHTML = (data.technical_reasons || []).slice(0,3).join(" • ") || "RSI • EMA • MACD • BB • Stochastic • ADX";
+    $("smartMoneyDetail").innerHTML = [data.liquidity, data.order_block, data.fvg, data.market_zone].filter(Boolean).filter(x => x !== "NONE" && x !== "EQUILIBRIUM").join(" • ") || "No clear SMC event";
+    $("marketStructure").innerHTML = data.market_structure || "-";
+    $("smartMoneyDetail2").innerHTML = (data.smart_money_reasons || []).slice(0,4).join(" • ") || "Structure / liquidity scan";
 }
 
 function startTrade(data){
@@ -613,45 +657,10 @@ function renderData(data, fromFinalCheck=false){
         rawSignal === "BUY" ||
         rawSignal === "SELL";
 
-    // A confirmed entry starts the actual trade timer.
-    if(data.entry_now === true && isTrade){
-        startTrade(data);
-        return true;
-    }
-
-    // A fresh setup cancels the old result display.
-    if(data.pre_entry === true && isTrade){
-        lastResult = null;
-        hideResult();
-
-        const seconds = Math.max(
-            1,
-            Number(data.entry_countdown ?? 10)
-        );
-
-        pendingTrade = {
-            direction: rawSignal,
-            entryTs: Number(data.entry_ts ?? data.next_candle_ts),
-            duration: Number(
-                data.duration_seconds ??
-                intervalToSeconds(data.interval)
-            )
-        };
-
-        $("signal").innerHTML =
-            rawSignal + " — ENTRY IN " + seconds + "s";
-
-        $("entry").innerHTML =
-            "⚡ ENTRY IN " + seconds + "s";
-
-        $("countdown").innerHTML =
-            "⏱️ " + seconds;
-
-        $("time").innerHTML =
-            "OPEN FOR " + durationLabel(data) +
-            " • ENTRY IN " + seconds + "s";
-
-        setSignalClass(rawSignal);
+    // Every requested signal gets a fixed 10-second pre-entry window.
+    // Even if the backend says ENTRY NOW, do not open the local trade yet.
+    if(isTrade){
+        armPreEntry(data, 10);
         return true;
     }
 
@@ -742,6 +751,54 @@ function scheduleNextPoll(){
     }, 1000);
 }
 
+function armPreEntry(data, seconds=10){
+    if(activeTrade) return;
+
+    const direction = String(
+        data.raw_signal || data.signal || ""
+    ).toUpperCase();
+
+    if(!["BUY","SELL"].includes(direction)) return;
+
+    lastResult = null;
+    hideResult();
+
+    const duration = Number(
+        data.duration_seconds ??
+        intervalToSeconds(data.interval)
+    );
+
+    pendingTrade = {
+        direction: direction,
+        data: data,
+        duration: Number.isFinite(duration) && duration > 0 ? duration : 60,
+        startAt: Date.now() + Math.max(1, seconds) * 1000
+    };
+
+    lastData = data;
+    running = true;
+
+    $("signal").innerHTML =
+        direction + " — ENTRY IN " + seconds + "s";
+
+    $("countdown").innerHTML =
+        "⏱️ " + seconds;
+
+    $("entry").innerHTML =
+        "⚡ ENTRY IN " + seconds + "s";
+
+    $("time").innerHTML =
+        "OPEN FOR " + durationLabel(data) +
+        " • ENTRY IN " + seconds + "s";
+
+    setSignalClass(direction);
+
+    $("analyzeBtn").disabled = true;
+    $("analyzeBtn").innerHTML = "Entry in " + seconds + "s";
+
+    startLocalCountdown();
+}
+
 function startLocalCountdown(){
     if(countdownTimer){
         clearInterval(countdownTimer);
@@ -750,69 +807,53 @@ function startLocalCountdown(){
     countdownTimer = setInterval(() => {
         if(!running) return;
 
-        // During a live trade, count down to expiry.
-        if(activeTrade){
-            updateActiveClock();
-            return;
-        }
-
-        if(!lastData?.next_candle_ts){
-            return;
-        }
-
-        const now = Date.now() / 1000;
-        const remaining = Math.ceil(
-            Number(lastData.next_candle_ts) - now
-        );
-
-        const signal =
-            lastData.raw_signal ||
-            lastData.signal;
-
-        const isTrade =
-            signal === "BUY" ||
-            signal === "SELL";
-
-        if(isTrade && remaining > 0 && remaining <= 10){
-            lastData.pre_entry = true;
-            lastData.entry_countdown = remaining;
-            lastData.signal = signal;
-
-            pendingTrade = {
-                direction: signal,
-                entryTs: Number(
-                    lastData.entry_ts ??
-                    lastData.next_candle_ts
-                ),
-                duration: Number(
-                    lastData.duration_seconds ??
-                    intervalToSeconds(lastData.interval)
+        // First count down the mandatory 10-second pre-entry window.
+        if(pendingTrade && !activeTrade){
+            const remaining = Math.max(
+                0,
+                Math.ceil(
+                    (pendingTrade.startAt - Date.now()) / 1000
                 )
+            );
+
+            if(remaining > 0){
+                $("countdown").innerHTML = "⏱️ " + remaining;
+                $("entry").innerHTML = "⚡ ENTRY IN " + remaining + "s";
+                $("time").innerHTML =
+                    "OPEN FOR " + durationLabel(pendingTrade.data) +
+                    " • ENTRY IN " + remaining + "s";
+                $("signal").innerHTML =
+                    pendingTrade.direction +
+                    " — ENTRY IN " + remaining + "s";
+                setSignalClass(pendingTrade.direction);
+                $("analyzeBtn").innerHTML =
+                    "Entry in " + remaining + "s";
+                return;
+            }
+
+            // The 10-second window has finished: this is the actual entry.
+            const nowTs = Math.floor(Date.now() / 1000);
+            const tradeData = {
+                ...pendingTrade.data,
+                entry_now: true,
+                entry_ts: nowTs,
+                expiry_ts: nowTs + pendingTrade.duration,
+                duration_seconds: pendingTrade.duration,
+                raw_signal: pendingTrade.direction,
+                signal: pendingTrade.direction
             };
 
-            $("countdown").innerHTML =
-                "⏱️ " + remaining;
-
-            $("entry").innerHTML =
-                "⚡ ENTRY IN " + remaining + "s";
-
-            $("time").innerHTML =
-                "OPEN FOR " + durationLabel(lastData) +
-                " • ENTRY IN " + remaining + "s";
-
-            $("signal").innerHTML =
-                signal + " — ENTRY IN " + remaining + "s";
-
-            setSignalClass(signal);
+            pendingTrade = null;
+            startTrade(tradeData);
+            return;
         }
 
-        if(remaining <= 0){
-            // Never invent ENTRY NOW locally: backend confirms it.
-            $("countdown").innerHTML = "🔎 CHECKING...";
-            fetchAnalysis();
+        if(activeTrade){
+            updateActiveClock();
         }
-    }, 250);
+    }, 200);
 }
+
 
 async function startAnalysis(){
     stopTimers();
@@ -831,19 +872,22 @@ async function startAnalysis(){
 
     const data = await fetchAnalysis();
 
-    // Keep the button disabled for the lifetime of an active trade.
+    // A signal is now always armed behind the 10-second pre-entry window.
     if(activeTrade){
         $("analyzeBtn").disabled = true;
         $("analyzeBtn").innerHTML = "Trade in progress";
         startLocalCountdown();
         scheduleNextPoll();
+    }else if(pendingTrade){
+        $("analyzeBtn").disabled = true;
+        $("analyzeBtn").innerHTML = "Entry in 10s";
+        startLocalCountdown();
     }else{
         $("analyzeBtn").disabled = false;
         $("analyzeBtn").innerHTML =
             data && data.signal_quality === "NO_STRONG_SETUP"
                 ? "Try Again"
                 : "Get Signal";
-        startLocalCountdown();
     }
 }
 
