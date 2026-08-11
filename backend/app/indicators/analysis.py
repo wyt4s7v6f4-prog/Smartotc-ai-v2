@@ -8,6 +8,9 @@ import ta
 OKX_BASE_URL = "https://www.okx.com/api/v5/market/candles"
 
 INTERVAL_MAP = {
+    # 30s mode uses the latest 1-minute market candles for indicators;
+    # the entry clock itself is synchronized to 30-second boundaries.
+    "30s": "1m",
     "1m": "1m",
     "3m": "3m",
     "5m": "5m",
@@ -23,6 +26,7 @@ INTERVAL_MAP = {
 
 # Seconds in each supported candle interval.
 INTERVAL_SECONDS = {
+    "30s": 30,
     "1m": 60,
     "3m": 180,
     "5m": 300,
@@ -71,6 +75,10 @@ FOREX_PAIRS = {
 }
 
 TD_INTERVAL_MAP = {
+    # Twelve Data does not provide a native 30-second FX candle in this setup.
+    # 30s mode therefore uses 1-minute FX candles for indicators while the
+    # timed entry boundary is 30 seconds.
+    "30s": "1min",
     "1m": "1min",
     "5m": "5min",
     "15m": "15min",
