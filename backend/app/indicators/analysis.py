@@ -1,3 +1,4 @@
+import os
 import time
 import requests
 import pandas as pd
@@ -44,6 +45,136 @@ PRE_ENTRY_SECONDS = 10
 ENTRY_CONFIRM_SECONDS = 3
 
 
+TWELVEDATA_BASE_URL = "https://api.twelvedata.com/time_series"
+# Set this in Render Environment Variables for OTC/Forex support.
+TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY", "").strip()
+
+OTC_PAIRS = {
+    "EUR/USD OTC": "EUR/USD",
+    "GBP/USD OTC": "GBP/USD",
+    "USD/JPY OTC": "USD/JPY",
+    "USD/CHF OTC": "USD/CHF",
+    "USD/CAD OTC": "USD/CAD",
+    "AUD/USD OTC": "AUD/USD",
+    "NZD/USD OTC": "NZD/USD",
+    "EUR/JPY OTC": "EUR/JPY",
+    "EUR/GBP OTC": "EUR/GBP",
+    "EUR/CHF OTC": "EUR/CHF",
+    "GBP/JPY OTC": "GBP/JPY",
+    "AUD/JPY OTC": "AUD/JPY",
+}
+
+FOREX_PAIRS = {
+    "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
+    "AUD/USD", "NZD/USD", "EUR/JPY", "EUR/GBP", "EUR/CHF",
+    "GBP/JPY", "AUD/JPY", "XAU/USD", "XAG/USD",
+}
+
+TD_INTERVAL_MAP = {
+    "1m": "1min",
+    "5m": "5min",
+    "15m": "15min",
+    "30m": "30min",
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1day",
+}
+
+
+def _is_otc(symbol: str) -> bool:
+    return symbol.upper().strip() in {k.upper() for k in OTC_PAIRS}
+
+
+def _forex_symbol(symbol: str) -> str:
+    clean = symbol.upper().strip()
+    if clean in {k.upper() for k in OTC_PAIRS}:
+        for display, pair in OTC_PAIRS.items():
+            if clean == display.upper():
+                return pair
+    return clean.replace("-", "/")
+
+
+def _get_twelvedata_candles(symbol: str, interval: str, limit: int = 250):
+    if not TWELVEDATA_API_KEY:
+        return None, {
+            "error": "TWELVEDATA_API_KEY is not configured",
+            "details": "Add TWELVEDATA_API_KEY to Render Environment Variables to enable OTC/Forex data.",
+            "symbol": symbol,
+        }
+
+    td_interval = TD_INTERVAL_MAP.get(interval)
+    if td_interval is None:
+        return None, {
+            "error": "Unsupported interval for OTC/Forex",
+            "interval": interval,
+            "supported_intervals": sorted(TD_INTERVAL_MAP.keys()),
+        }
+
+    pair = _forex_symbol(symbol)
+    params = {
+        "symbol": pair,
+        "interval": td_interval,
+        "outputsize": min(max(limit, 200), 5000),
+        "apikey": TWELVEDATA_API_KEY,
+    }
+
+    try:
+        response = requests.get(
+            TWELVEDATA_BASE_URL,
+            params=params,
+            headers={"User-Agent": "SmartOTC-AI/1.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        return None, {"error": "TwelveData request failed", "details": str(exc)}
+    except ValueError:
+        return None, {
+            "error": "TwelveData returned non-JSON response",
+            "status": response.status_code,
+            "body": response.text[:500],
+        }
+
+    if "values" not in payload:
+        return None, {
+            "error": "TwelveData API error",
+            "details": payload,
+            "symbol": pair,
+        }
+
+    values = list(reversed(payload["values"] or []))
+    parsed = []
+
+    # TwelveData timestamps are exchange-local/UTC-like strings depending on
+    # the endpoint. For timing we use the Render server clock, while candles
+    # are used for the indicators.
+    for i, row in enumerate(values):
+        try:
+            parsed.append({
+                "time": row.get("datetime", i),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row.get("volume", 0) or 0),
+                "confirm": "1",
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    if len(parsed) < 200:
+        return None, {
+            "error": "Insufficient TwelveData candle data",
+            "received": len(parsed),
+            "required": 200,
+            "symbol": pair,
+            "interval": td_interval,
+        }
+
+    return parsed, None
+
+
 def _okx_symbol(symbol: str) -> str:
     clean = symbol.upper().replace("/", "").replace("-", "")
     if clean.endswith("USDT"):
@@ -52,6 +183,12 @@ def _okx_symbol(symbol: str) -> str:
 
 
 def _get_candles(symbol: str, interval: str, limit: int = 300):
+    # OTC and Forex are supplied by TwelveData. OTC here means the selected
+    # OTC pair is analyzed from its underlying FX feed; broker-specific OTC
+    # quotes are not publicly standardized.
+    if _is_otc(symbol) or symbol.upper().strip() in FOREX_PAIRS:
+        return _get_twelvedata_candles(symbol, interval, limit)
+
     inst_id = _okx_symbol(symbol)
     bar = INTERVAL_MAP.get(interval)
 
@@ -131,7 +268,6 @@ def _get_candles(symbol: str, interval: str, limit: int = 300):
         }
 
     return parsed, None
-
 
 def _indicator_frame(candles):
     df = pd.DataFrame(candles).copy()
@@ -336,7 +472,97 @@ def _entry_window(interval: str):
     }
 
 
+def _analyze_forex_via_project_provider(symbol: str, interval: str):
+    """Use the project's existing TwelveData provider for OTC/Forex.
+
+    This keeps OTC compatible with the existing Render project without
+    duplicating the API-key handling. The provider supplies the live FX
+    indicators; this function adds the same timed-entry fields used by the
+    crypto analyzer.
+    """
+    try:
+        from app.providers.twelvedata import get_forex_data
+    except Exception as exc:
+        return None, {
+            "error": "OTC/Forex provider unavailable",
+            "details": str(exc),
+        }
+
+    pair = _forex_symbol(symbol)
+    try:
+        result = get_forex_data(symbol=pair, interval=interval)
+    except Exception as exc:
+        return None, {
+            "error": "OTC/Forex analysis failed",
+            "details": str(exc),
+            "symbol": pair,
+        }
+
+    if not isinstance(result, dict):
+        return None, {
+            "error": "OTC/Forex provider returned invalid data",
+            "symbol": pair,
+        }
+
+    if result.get("error"):
+        return None, result
+
+    timing = _entry_window(interval)
+    if not timing["supported"]:
+        return None, {
+            "error": "Unsupported interval for timed entry",
+            "interval": interval,
+        }
+
+    raw_signal = str(result.get("signal", "WAIT")).upper()
+    strong_signal = raw_signal in {"BUY", "SELL"}
+    pre_entry = bool(timing["pre_entry"] and strong_signal)
+    entry_now = bool(timing["entry_now"] and strong_signal)
+
+    if entry_now:
+        trade_time = "NOW"
+        entry = "NOW"
+    elif pre_entry:
+        trade_time = f"IN {timing['remaining']}s"
+        entry = f"IN {timing['remaining']}s"
+    else:
+        trade_time = None
+        entry = None
+
+    score = int(result.get("score", 0))
+    probability = max(50, min(90, 50 + abs(score - 50) // 2))
+
+    return {
+        "signal": raw_signal if (pre_entry or entry_now) else "WAIT",
+        "raw_signal": raw_signal,
+        "trend": result.get("trend"),
+        "score": score,
+        "probability": probability,
+        "entry": entry,
+        "entry_now": entry_now,
+        "pre_entry": pre_entry,
+        "entry_countdown": timing["remaining"],
+        "next_candle_ts": timing["next_candle_ts"],
+        "trade_time": trade_time,
+        "signal_live": True,
+        "price": result.get("price"),
+        "ema20": result.get("ema20"),
+        "ema50": result.get("ema50"),
+        "rsi": result.get("rsi"),
+        "interval": interval,
+        "symbol": symbol.upper(),
+        "source": "TwelveData FX proxy",
+        "otc_proxy": bool(_is_otc(symbol)),
+    }, None
+
+
 def analyze(symbol="BTCUSDT", interval="1h"):
+    if _is_otc(symbol) or symbol.upper().strip() in FOREX_PAIRS:
+        forex_result, forex_error = _analyze_forex_via_project_provider(symbol, interval)
+        if forex_error:
+            return forex_error
+        return forex_result
+
     timing = _entry_window(interval)
 
     if not timing["supported"]:
@@ -418,5 +644,6 @@ def analyze(symbol="BTCUSDT", interval="1h"):
         "atr": round(float(last["atr"]), 8),
         "interval": interval,
         "symbol": symbol.upper(),
-        "source": "OKX",
+        "source": "TwelveData FX proxy" if (_is_otc(symbol) or symbol.upper().strip() in FOREX_PAIRS) else "OKX",
+        "otc_proxy": bool(_is_otc(symbol)),
     }
