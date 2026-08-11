@@ -77,6 +77,8 @@ button:disabled{
     min-height:48px;
 }
 
+.auto-badge{display:inline-block;background:#2563eb;color:#fff;padding:7px 12px;border-radius:999px;font-size:13px;font-weight:bold;margin-top:4px;}
+
 .otc-badge{
     display:inline-block;
     background:#7c3aed;
@@ -196,16 +198,7 @@ button:disabled{
     </optgroup>
 </select>
 
-<select id="interval">
-    <option>30s</option>
-    <option>1m</option>
-    <option>5m</option>
-    <option>15m</option>
-    <option>30m</option>
-    <option>1h</option>
-    <option>4h</option>
-    <option>1d</option>
-</select>
+<div class="auto-badge">🤖 AUTO MODE • ENGINE CHOOSES TRADE TIME</div>
 
 <div id="otcBadge" class="otc-badge" style="display:none;">OTC • FX PROXY FEED</div>
 
@@ -257,10 +250,9 @@ button:disabled{
     </div>
 
     <div class="note">
-        Signal is checked automatically. In 30s mode the entry clock runs on 30-second boundaries;
-        FX/OTC indicators use the latest available 1-minute feed. For other intervals,
-        the entry alert appears during the final 10 seconds before the next candle.
-        OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
+        🤖 AUTO mode: choose the market and SmartOTC AI selects the trade duration automatically.
+        OTC/FX uses a 1-minute indicator feed with 30s expiry; crypto uses a 1-minute feed with 60s expiry.
+        The signal is generated immediately. OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
     </div>
 
 </div>
@@ -280,10 +272,6 @@ let lastResult = null;
 let finalCheckPending = false;
 
 const $ = id => document.getElementById(id);
-
-function selectedInterval(){
-    return $("interval").value;
-}
 
 function selectedSymbol(){
     return $("symbol").value;
@@ -656,7 +644,7 @@ function renderData(data, fromFinalCheck=false){
         return true;
     }
 
-    $("signal").innerHTML = "WAIT";
+    $("signal").innerHTML = "READY";
     $("entry").innerHTML = "";
     $("countdown").innerHTML = "";
 
@@ -688,11 +676,9 @@ function renderData(data, fromFinalCheck=false){
 
 async function fetchAnalysis(fromFinalCheck=false){
     const symbol = selectedSymbol();
-    const interval = selectedInterval();
-
     try{
         const r = await fetch(
-            `/analyze?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`,
+            `/analyze?symbol=${encodeURIComponent(symbol)}&interval=auto&mode=auto`,
             {cache:"no-store"}
         );
 
@@ -846,22 +832,11 @@ async function startAnalysis(){
 }
 
 $("symbol").addEventListener("change", () => {
-    if(running){
-        stopTimers();
-        startAnalysis();
-    }else{
-        updateOTCBadge();
-    }
-});
-
-$("interval").addEventListener("change", () => {
+    stopTimers();
     updateOTCBadge();
-
-    if(running){
-        stopTimers();
-        startAnalysis();
-    }
+    startAnalysis();
 });
+
 
 updateOTCBadge();
 </script>
