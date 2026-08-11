@@ -581,23 +581,44 @@ def _analyze_forex_via_project_provider(symbol: str, interval: str):
 
 
 
-def _auto_trade_plan(symbol: str):
-    """Return a simple automatic plan without exposing a timeframe selector.
+AUTO_DURATIONS = (10, 30, 60, 120, 300, 600, 900)
 
-    The UI chooses only the market. The engine selects a practical indicator
-    feed and expiry: OTC/FX uses 1-minute candles with 30s expiry, while crypto
-    uses 1-minute candles with 60s expiry. The signal direction is always BUY
-    or SELL; when the strict rule returns WAIT, the stronger side of the score
-    is used and the confidence is kept conservative.
+
+def _auto_trade_plan(symbol: str, score: int = 0, probability: int = 50):
+    """Choose an expiry automatically from the signal strength.
+
+    The user selects only the market. Indicators are calculated from a 1-minute
+    feed, while the trade expiry is selected from 10s/30s/1m/2m/5m/10m/15m.
+    Stronger setups use shorter expiries; weaker-but-still-qualified setups use
+    longer expiries. This is a heuristic, not a guarantee of outcome.
     """
     clean = symbol.upper().strip()
-    if _is_otc(clean) or clean in FOREX_PAIRS:
-        return "1m", 30
-    return "1m", 60
+    abs_score = abs(int(score or 0))
+    prob = int(probability or 50)
+
+    if abs_score >= 90 and prob >= 85:
+        duration = 10
+    elif abs_score >= 85 and prob >= 82:
+        duration = 30
+    elif abs_score >= 80 and prob >= 78:
+        duration = 60
+    elif abs_score >= 76 and prob >= 75:
+        duration = 120
+    elif abs_score >= 73 and prob >= 72:
+        duration = 300
+    elif abs_score >= 70 and prob >= 70:
+        duration = 600
+    else:
+        duration = 900
+
+    return "1m", duration
 
 
 def analyze_auto(symbol="BTCUSDT"):
-    interval, duration = _auto_trade_plan(symbol)
+    # First get the 1-minute indicator snapshot. The expiry is selected after
+    # the score/probability are known.
+    interval = "1m"
+    result = analyze(symbol, interval, mode="manual")
     result = analyze(symbol, interval, mode="manual")
     if not isinstance(result, dict):
         return {"error": "Invalid analysis response"}
@@ -606,14 +627,41 @@ def analyze_auto(symbol="BTCUSDT"):
 
     raw = str(result.get("raw_signal") or result.get("signal") or "WAIT").upper()
     score = int(result.get("score", 0) or 0)
-    if raw not in {"BUY", "SELL"}:
-        raw = "BUY" if score >= 0 else "SELL"
-
-    # Conservative automatic confidence. This is a model score, not a
-    # guarantee of a profitable trade.
     probability = int(result.get("probability", 50) or 50)
-    if result.get("raw_signal") == "WAIT":
-        probability = min(69, max(51, 50 + min(19, abs(score) // 3)))
+
+    # AUTO mode is intentionally selective. Never manufacture a BUY/SELL
+    # direction when the indicator set is inconclusive. A trade is allowed
+    # only when the underlying rules produce a real signal and the score is
+    # strong enough. This improves signal quality at the cost of fewer trades.
+    min_score = 70
+    min_probability = 70
+    strong = (
+        raw in {"BUY", "SELL"}
+        and abs(score) >= min_score
+        and probability >= min_probability
+    )
+    interval, duration = _auto_trade_plan(symbol, score, probability)
+
+    if not strong:
+        result.update({
+            "mode": "auto",
+            "signal": "WAIT",
+            "raw_signal": raw if raw in {"BUY", "SELL"} else "WAIT",
+            "entry": None,
+            "entry_now": False,
+            "pre_entry": False,
+            "entry_countdown": 0,
+            "entry_ts": None,
+            "expiry_ts": None,
+            "duration_seconds": duration,
+            "trade_duration": f"{duration}s",
+            "trade_time": f"{duration}s",
+            "probability": probability,
+            "signal_quality": "NO_STRONG_SETUP",
+            "auto_timeframe": interval,
+            "auto_plan": True,
+        })
+        return result
 
     now = int(time.time())
     expiry = now + duration
@@ -631,6 +679,7 @@ def analyze_auto(symbol="BTCUSDT"):
         "trade_duration": f"{duration}s",
         "trade_time": f"{duration}s",
         "probability": probability,
+        "signal_quality": "STRONG_SETUP",
         "auto_timeframe": interval,
         "auto_plan": True,
     })
