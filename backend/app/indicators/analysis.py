@@ -4,6 +4,7 @@ import math
 import requests
 import pandas as pd
 import ta
+from app.indicators.advanced import advanced_snapshot
 
 
 OKX_BASE_URL = "https://www.okx.com/api/v5/market/candles"
@@ -303,7 +304,8 @@ def _indicator_frame(candles):
         window=14,
     )
 
-    return df.dropna().reset_index(drop=True)
+    df = df.dropna().reset_index(drop=True)
+    return df
 
 
 def _score_row(row, prev):
@@ -654,6 +656,10 @@ def analyze_auto(symbol="BTCUSDT"):
 
     combined_score = int(round(weighted_score / weight_total)) if weight_total else 0
 
+    technical_score = int(round(sum(float(x.get("technical_score", 0)) * weights.get(str(x.get("interval")), 0) for x in valid) / weight_total)) if weight_total else 0
+    smart_money_score = int(round(sum(float(x.get("smart_money_score", 0)) * weights.get(str(x.get("interval")), 0) for x in valid) / weight_total)) if weight_total else 0
+    combined_score = int(max(-100, min(100, round(combined_score + 0.35 * technical_score + 0.45 * smart_money_score))))
+
     directions = {"BUY": 0.0, "SELL": 0.0}
     for item in valid:
         raw = str(item.get("raw_signal") or item.get("signal") or "WAIT").upper()
@@ -699,6 +705,8 @@ def analyze_auto(symbol="BTCUSDT"):
             "signal": "WAIT",
             "raw_signal": direction if direction in {"BUY", "SELL"} else "WAIT",
             "score": combined_score,
+            "technical_score": technical_score,
+            "smart_money_score": smart_money_score,
             "probability": probability,
             "entry": None,
             "entry_now": False,
@@ -785,10 +793,19 @@ def analyze(symbol="BTCUSDT", interval="1h", mode="manual"):
             "error": "Not enough data after indicator calculation"
         }
 
+    df, technical, smart_money = advanced_snapshot(df)
+    if len(df) < 30:
+        return {"error": "Not enough data after advanced analysis"}
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    score, signal = _score_row(last, prev)
+    base_score, base_signal = _score_row(last, prev)
+    # Advanced TA and Smart Money act as confirmation layers rather than
+    # replacing the core EMA/RSI/MACD model. This reduces overfitting while
+    # rewarding confluence when independent signals agree.
+    score = int(max(-100, min(100, round(base_score + 0.45 * technical["score"] + 0.55 * smart_money["score"]))))
+    signal = "BUY" if score >= 55 else "SELL" if score <= -55 else "WAIT"
 
     if last["ema20"] > last["ema50"] > last["ema200"]:
         trend = "UPTREND"
@@ -797,11 +814,11 @@ def analyze(symbol="BTCUSDT", interval="1h", mode="manual"):
     else:
         trend = "SIDEWAYS"
 
-    probability = _empirical_probability(
-        df,
-        score,
-        signal,
-    )
+    probability = _empirical_probability(df, base_score, base_signal)
+    confluence = (abs(technical["score"]) + abs(smart_money["score"])) / 2
+    if signal in {"BUY", "SELL"} and ((signal == "BUY" and technical["score"] > 0 and smart_money["score"] > 0) or (signal == "SELL" and technical["score"] < 0 and smart_money["score"] < 0)):
+        probability += 6
+    probability = int(max(50, min(92, probability + int(confluence * 0.08))))
 
     # A normal signal is NOT an immediate entry anymore.
     # It becomes a timed entry only during the final 10 seconds before the
@@ -827,7 +844,19 @@ def analyze(symbol="BTCUSDT", interval="1h", mode="manual"):
         "raw_signal": signal,
         "trend": trend,
         "score": int(score),
+        "base_score": int(base_score),
         "probability": int(probability),
+        "technical_score": int(technical["score"]),
+        "technical_label": technical["label"],
+        "technical_reasons": technical["reasons"],
+        "smart_money_score": int(smart_money["score"]),
+        "smart_money_label": smart_money["label"],
+        "market_structure": smart_money["structure"],
+        "liquidity": smart_money["liquidity"],
+        "order_block": smart_money["order_block"],
+        "fvg": smart_money["fvg"],
+        "market_zone": smart_money["zone"],
+        "smart_money_reasons": smart_money["reasons"],
         "entry": entry,
         "entry_now": entry_now,
         "pre_entry": pre_entry,
