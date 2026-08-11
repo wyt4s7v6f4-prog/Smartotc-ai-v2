@@ -5,6 +5,7 @@ import threading
 import pandas as pd
 import requests
 import ta
+from app.indicators.advanced import advanced_snapshot
 
 
 API_KEY = os.getenv("TWELVEDATA_API_KEY", "afdc8f80c3374bb7a5130679e76e57ae")
@@ -174,6 +175,14 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
             "interval": requested_interval,
         }
 
+    df, technical, smart_money = advanced_snapshot(df)
+    if len(df) < 30:
+        return {
+            "error": "Not enough data after advanced analysis",
+            "symbol": symbol,
+            "interval": requested_interval,
+        }
+
     last = df.iloc[-1]
 
     # Directional scoring is deliberately less brittle than the old
@@ -218,7 +227,8 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
         elif delta < 0:
             score -= 10
 
-    score = max(-100, min(100, int(score)))
+    base_score = int(score)
+    score = max(-100, min(100, int(round(base_score + 0.45 * technical["score"] + 0.55 * smart_money["score"]))))
 
     # 45 is the minimum directional threshold for the proxy feed. AUTO mode
     # applies an additional quality filter before opening a trade.
@@ -229,7 +239,9 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
     else:
         signal = "WAIT"
 
-    probability = min(90, max(50, 50 + int(abs(score) * 0.40)))
+    probability = min(92, max(50, 50 + int(abs(score) * 0.40)))
+    if ((score > 0 and technical["score"] > 0 and smart_money["score"] > 0) or (score < 0 and technical["score"] < 0 and smart_money["score"] < 0)):
+        probability = min(92, probability + 6)
 
     result = {
         "price": round(float(last["close"]), 5),
@@ -238,7 +250,19 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
         "rsi": round(float(last["rsi"]), 2),
         "signal": signal,
         "score": int(score),
+        "base_score": base_score,
         "probability": probability,
+        "technical_score": int(technical["score"]),
+        "technical_label": technical["label"],
+        "technical_reasons": technical["reasons"],
+        "smart_money_score": int(smart_money["score"]),
+        "smart_money_label": smart_money["label"],
+        "market_structure": smart_money["structure"],
+        "liquidity": smart_money["liquidity"],
+        "order_block": smart_money["order_block"],
+        "fvg": smart_money["fvg"],
+        "market_zone": smart_money["zone"],
+        "smart_money_reasons": smart_money["reasons"],
         "trend": "BULLISH" if last["ema20"] > last["ema50"] else "BEARISH",
         "entry": None,
         "entry_now": False,
