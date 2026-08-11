@@ -1,9 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from app.providers.twelvedata import get_forex_data
 from app.providers.scanner import scan_market
-
 from app.indicators.analysis import analyze
 
 app = FastAPI()
@@ -24,10 +22,9 @@ def get_analysis(
     symbol: str = "BTCUSDT",
     interval: str = "1h"
 ):
-    if "/" in symbol or "OTC" in symbol:
-        symbol = symbol.replace(" OTC", "")
-        return get_forex_data(symbol=symbol, interval=interval)
-
+    # Route ALL symbols through the unified analyzer. This is important for
+    # OTC/Forex because the analyzer adds the same 10-second pre-entry timer
+    # and uses the project's TwelveData FX proxy with rate-limit protection.
     return analyze(symbol, interval)
 
 
