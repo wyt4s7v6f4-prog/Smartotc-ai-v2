@@ -204,7 +204,7 @@ button:disabled{
 
 <br>
 
-<button id="analyzeBtn" onclick="startAnalysis()">Analyze</button>
+<button id="analyzeBtn" onclick="startAnalysis()">Get Signal</button>
 
 <div class="card">
 
@@ -250,9 +250,11 @@ button:disabled{
     </div>
 
     <div class="note">
-        🤖 AUTO mode: choose the market and SmartOTC AI selects the trade duration automatically.
-        OTC/FX uses a 1-minute indicator feed with 30s expiry; crypto uses a 1-minute feed with 60s expiry.
-        The signal is generated immediately. OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
+        🤖 AUTO mode: choose the market and SmartOTC AI selects the trade duration automatically from 10s, 30s, 1m, 2m, 5m, 10m or 15m.
+        Only stronger setups are issued (score ≥ 70 and calibrated probability ≥ 70%).
+        Stronger setups use shorter expiries; qualified but weaker setups use longer expiries.
+        After a trade closes, press Next Signal to request the next setup. OTC/FX and crypto use the latest available 1-minute indicator feed.
+        OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
     </div>
 
 </div>
@@ -321,7 +323,7 @@ function showResult(status, detail, cls){
     $("resultDetail").innerHTML = detail || "";
 }
 
-function clearDisplay(message="WAIT", clearResult=true){
+function clearDisplay(message="READY", clearResult=true){
     updateOTCBadge();
 
     $("signal").innerHTML = message;
@@ -393,6 +395,8 @@ function startTrade(data){
     finalCheckPending = false;
     hideResult();
 
+    $("analyzeBtn").disabled = true;
+    $("analyzeBtn").innerHTML = "Trade in progress";
     renderActiveTrade(data);
 }
 
@@ -534,6 +538,13 @@ function finalizeTrade(data){
         (isOTC() ? " • OTC result uses FX proxy price" : ""),
         cls
     );
+
+    // The next signal is manual: enable the button only after this trade
+    // has fully expired and its result has been calculated.
+    running = false;
+    stopTimers();
+    $("analyzeBtn").disabled = false;
+    $("analyzeBtn").innerHTML = "Next Signal";
 }
 
 function updateActiveClock(){
@@ -644,17 +655,19 @@ function renderData(data, fromFinalCheck=false){
         return true;
     }
 
-    $("signal").innerHTML = "READY";
+    $("signal").innerHTML = data.signal_quality === "NO_STRONG_SETUP"
+        ? "NO STRONG SIGNAL"
+        : "READY";
     $("entry").innerHTML = "";
     $("countdown").innerHTML = "";
 
-    // Even while waiting, show how long the eventual trade will be.
     $("time").innerHTML =
-        "OPEN FOR " + durationLabel(data);
+        "Press Get Signal for the next setup";
 
     setSignalClass("WAIT");
 
-    // Keep the most recent result visible until a new signal appears.
+    // After a completed trade, keep its result visible. No new trade is
+    // started automatically; the user must press Get Signal.
     if(lastResult){
         const cls =
             lastResult.status === "WIN" ? "result-win" :
@@ -717,24 +730,16 @@ function stopTimers(){
 }
 
 function scheduleNextPoll(){
-    if(!running) return;
-
-    let delay = 5000;
-
-    if(activeTrade){
-        delay = 1000;
-    }else{
-        const seconds = Number(
-            lastData?.entry_countdown ?? 999
-        );
-
-        delay = seconds <= 12 ? 1000 : 5000;
-    }
+    // Only poll while a trade is actually open. After RESULT, the next
+    // signal is requested explicitly with the button.
+    if(!running || !activeTrade) return;
 
     pollTimer = setTimeout(async () => {
         await fetchAnalysis();
-        scheduleNextPoll();
-    }, delay);
+        if(activeTrade){
+            scheduleNextPoll();
+        }
+    }, 1000);
 }
 
 function startLocalCountdown(){
@@ -820,15 +825,26 @@ async function startAnalysis(){
     hideResult();
 
     $("analyzeBtn").disabled = true;
+    $("analyzeBtn").innerHTML = "Analyzing...";
     $("signal").innerHTML = "ANALYZING...";
     $("signal").className = "wait";
 
-    await fetchAnalysis();
+    const data = await fetchAnalysis();
 
-    $("analyzeBtn").disabled = false;
-
-    startLocalCountdown();
-    scheduleNextPoll();
+    // Keep the button disabled for the lifetime of an active trade.
+    if(activeTrade){
+        $("analyzeBtn").disabled = true;
+        $("analyzeBtn").innerHTML = "Trade in progress";
+        startLocalCountdown();
+        scheduleNextPoll();
+    }else{
+        $("analyzeBtn").disabled = false;
+        $("analyzeBtn").innerHTML =
+            data && data.signal_quality === "NO_STRONG_SETUP"
+                ? "Try Again"
+                : "Get Signal";
+        startLocalCountdown();
+    }
 }
 
 $("symbol").addEventListener("change", () => {
