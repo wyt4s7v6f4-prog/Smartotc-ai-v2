@@ -190,15 +190,28 @@ async function analyze(){
 let symbol=document.getElementById("symbol").value;
 let interval=document.getElementById("interval").value;
 
-let r=await fetch(`/analyze?symbol=${symbol}&interval=${interval}`);
+let r=await fetch(`/analyze?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`);
 let data=await r.json();
 
-document.getElementById("price").innerHTML=data.price;
-document.getElementById("ema20").innerHTML=data.ema20;
-document.getElementById("ema50").innerHTML=data.ema50;
-document.getElementById("rsi").innerHTML=data.rsi;
+if (!r.ok || data.error) {
+    document.getElementById("signal").innerHTML = "ERROR";
+    document.getElementById("signal").className = "wait";
+    document.getElementById("entry").innerHTML = "";
+    document.getElementById("price").innerHTML = "-";
+    document.getElementById("ema20").innerHTML = "-";
+    document.getElementById("ema50").innerHTML = "-";
+    document.getElementById("rsi").innerHTML = "-";
+    document.getElementById("probability").innerHTML = "-";
+    document.getElementById("time").innerHTML = data.details || data.error || "Analysis failed";
+    return;
+}
 
-let probability = data.probability ?? 70;
+document.getElementById("price").innerHTML = data.price ?? "-";
+document.getElementById("ema20").innerHTML = data.ema20 ?? "-";
+document.getElementById("ema50").innerHTML = data.ema50 ?? "-";
+document.getElementById("rsi").innerHTML = data.rsi ?? "-";
+
+let probability = data.probability ?? "-";
 document.getElementById("probability").innerHTML = probability + " %";
 
 let time = data.trade_time ?? "";
