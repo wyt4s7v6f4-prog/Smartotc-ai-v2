@@ -95,9 +95,9 @@ def _get_candles(symbol: str, interval: str, limit: int = 250):
             }
         )
 
-    # Exclude the currently forming candle so indicators are based on confirmed data.
-    parsed = [row for row in parsed if row["confirm"] == "1"]
-
+    # Keep the currently forming candle so signals can be generated from
+    # the market conditions that exist right now. Because this candle is
+    # live, the signal may change before the candle closes.
     if len(parsed) < 200:
         return None, {
             "error": "Insufficient candle data",
@@ -141,9 +141,75 @@ def analyze(symbol="BTCUSDT", interval="1h"):
 
     score = 0
 
-    # Trend structure: strongest weight.
+    # Trend structure.
     bullish_trend = last["ema20"] > last["ema50"] > last["ema200"]
     bearish_trend = last["ema20"] < last["ema50"] < last["ema200"]
+
+    if bullish_trend:
+        score += 30
+    elif bearish_trend:
+        score -= 30
+
+    # Price location relative to EMA20.
+    if last["close"] > last["ema20"]:
+        score += 10
+    elif last["close"] < last["ema20"]:
+        score -= 10
+
+    # RSI momentum while avoiding extreme conditions.
+    if 52 <= last["rsi"] <= 68:
+        score += 15
+    elif 32 <= last["rsi"] < 48:
+        score -= 15
+    elif 68 < last["rsi"] <= 75:
+        score += 5
+    elif 25 <= last["rsi"] < 32:
+        score += 5
+    elif last["rsi"] > 75:
+        score -= 15
+    elif last["rsi"] < 25:
+        score += 15
+
+    # MACD direction and crossover.
+    macd_bull = last["macd"] > last["macd_signal"]
+    macd_bear = last["macd"] < last["macd_signal"]
+    macd_cross_up = (
+        last["macd"] > last["macd_signal"]
+        and prev["macd"] <= prev["macd_signal"]
+    )
+    macd_cross_down = (
+        last["macd"] < last["macd_signal"]
+        and prev["macd"] >= prev["macd_signal"]
+    )
+
+    if macd_bull:
+        score += 15
+    elif macd_bear:
+        score -= 15
+
+    if macd_cross_up:
+        score += 10
+    elif macd_cross_down:
+        score -= 10
+
+    # LIVE ENTRY: current candle is included, so BUY/SELL can be returned
+    # immediately when the live conditions align.
+    if (
+        score >= 60
+        and bullish_trend
+        and last["close"] >= last["ema20"]
+        and 45 <= last["rsi"] <= 75
+    ):
+        signal = "BUY"
+    elif (
+        score <= -60
+        and bearish_trend
+        and last["close"] <= last["ema20"]
+        and 25 <= last["rsi"] <= 55
+    ):
+        signal = "SELL"
+    else:
+        signal = "WAIT"
 
     if bullish_trend:
         score += 30
@@ -217,6 +283,7 @@ def analyze(symbol="BTCUSDT", interval="1h"):
         "entry": entry,
         "entry_now": signal in {"BUY", "SELL"},
         "trade_time": trade_time,
+        "signal_live": True,
         "price": round(float(last["close"]), 8),
         "ema20": round(float(last["ema20"]), 8),
         "ema50": round(float(last["ema50"]), 8),
