@@ -216,7 +216,7 @@ button:disabled{
 
 <div class="auto-badge">🤖 AUTO MODE • ENGINE CHOOSES TRADE TIME</div>
 
-<div id="otcBadge" class="otc-badge" style="display:none;">OTC • FX PROXY FEED</div>
+<div id="otcBadge" class="otc-badge" style="display:none;">OTC • QUOTEX FEED</div>
 
 <br>
 
@@ -288,8 +288,7 @@ button:disabled{
         🤖 AUTO mode: choose the market and SmartOTC AI selects the trade duration automatically from 10s, 30s, 1m, 2m, 5m, 10m or 15m.
         Only stronger setups are issued (score ≥ 70 and calibrated probability ≥ 70%).
         Stronger setups use shorter expiries; qualified but weaker setups use longer expiries.
-        After a trade closes, press Next Signal to request the next setup. Every new signal has a mandatory 10-second pre-entry countdown before the trade opens. OTC/FX and crypto use the latest available 1-minute indicator feed.
-        OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
+        After a trade closes, press Next Signal to request the next setup. Every new signal has a mandatory 10-second pre-entry countdown before the trade opens. OTC uses the authenticated Quotex OTC candle feed. If QUOTEX_SSID is missing or the Quotex feed is unavailable, no proxy price is substituted.
     </div>
 
 </div>
@@ -579,7 +578,7 @@ function finalizeTrade(data){
         " • Exit: " + formatPrice(exitPrice) +
         " • Movement: " + signedMovement +
         " • Duration: " + trade.duration + "s" +
-        (isOTC() ? " • OTC result uses FX proxy price" : ""),
+        (isOTC() ? " • OTC result uses Quotex OTC price" : ""),
         cls
     );
 
