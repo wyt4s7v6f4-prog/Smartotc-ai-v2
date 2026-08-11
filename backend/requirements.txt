@@ -7,3 +7,4 @@ pandas
 numpy
 ta
 jinja2
+git+https://github.com/A11ksa/API-Quotex.git
