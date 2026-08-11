@@ -1,5 +1,6 @@
 import os
 import time
+import math
 import requests
 import pandas as pd
 import ta
@@ -615,38 +616,90 @@ def _auto_trade_plan(symbol: str, score: int = 0, probability: int = 50):
 
 
 def analyze_auto(symbol="BTCUSDT"):
-    # First get the 1-minute indicator snapshot. The expiry is selected after
-    # the score/probability are known.
-    interval = "1m"
-    result = analyze(symbol, interval, mode="manual")
-    result = analyze(symbol, interval, mode="manual")
-    if not isinstance(result, dict):
-        return {"error": "Invalid analysis response"}
-    if result.get("error"):
-        return result
+    """Find the strongest current setup without asking the user for a timeframe.
 
-    raw = str(result.get("raw_signal") or result.get("signal") or "WAIT").upper()
-    score = int(result.get("score", 0) or 0)
-    probability = int(result.get("probability", 50) or 50)
+    The engine checks 1m/5m/15m data, combines the directional scores, and
+    chooses the expiry automatically. It never fabricates a direction when
+    the evidence is mixed; instead it asks for another scan.
+    """
+    timeframes = ("1m", "5m", "15m")
+    snapshots = []
 
-    # AUTO mode is intentionally selective. Never manufacture a BUY/SELL
-    # direction when the indicator set is inconclusive. A trade is allowed
-    # only when the underlying rules produce a real signal and the score is
-    # strong enough. This improves signal quality at the cost of fewer trades.
-    min_score = 70
-    min_probability = 70
-    strong = (
-        raw in {"BUY", "SELL"}
-        and abs(score) >= min_score
-        and probability >= min_probability
-    )
-    interval, duration = _auto_trade_plan(symbol, score, probability)
+    for tf in timeframes:
+        try:
+            item = analyze(symbol, tf, mode="manual")
+        except Exception as exc:
+            snapshots.append({"interval": tf, "error": str(exc)})
+            continue
+        if isinstance(item, dict) and not item.get("error"):
+            snapshots.append(item)
+
+    valid = [x for x in snapshots if x.get("score") is not None]
+    if not valid:
+        return {
+            "error": "Unable to obtain market data for signal search",
+            "symbol": symbol,
+            "checked_timeframes": list(timeframes),
+        }
+
+    # Weight the shorter timeframe most heavily while requiring the broader
+    # timeframes to contribute when they are available.
+    weights = {"1m": 0.50, "5m": 0.30, "15m": 0.20}
+    weighted_score = 0.0
+    weight_total = 0.0
+    for item in valid:
+        w = weights.get(str(item.get("interval")), 0.0)
+        weighted_score += float(item.get("score", 0)) * w
+        weight_total += w
+
+    combined_score = int(round(weighted_score / weight_total)) if weight_total else 0
+
+    directions = {"BUY": 0.0, "SELL": 0.0}
+    for item in valid:
+        raw = str(item.get("raw_signal") or item.get("signal") or "WAIT").upper()
+        if raw in directions:
+            directions[raw] += weights.get(str(item.get("interval")), 0.0)
+
+    if combined_score >= 45:
+        direction = "BUY"
+    elif combined_score <= -45:
+        direction = "SELL"
+    else:
+        direction = "BUY" if directions["BUY"] > directions["SELL"] and directions["BUY"] >= 0.50 else (
+            "SELL" if directions["SELL"] > directions["BUY"] and directions["SELL"] >= 0.50 else "WAIT"
+        )
+
+    probability = min(90, max(50, 50 + int(abs(combined_score) * 0.40)))
+
+    # Agreement across timeframes is a quality bonus; disagreement is a
+    # penalty. This makes the displayed confidence more conservative.
+    agreeing = sum(
+        weights.get(str(x.get("interval")), 0.0)
+        for x in valid
+        if str(x.get("raw_signal") or x.get("signal") or "WAIT").upper() == direction
+    ) if direction in {"BUY", "SELL"} else 0.0
+    if direction in {"BUY", "SELL"}:
+        probability = min(90, probability + (5 if agreeing >= 0.80 else 0))
+        if agreeing < 0.50:
+            probability = max(50, probability - 8)
+
+    min_score = 55
+    min_probability = 68
+    strong = direction in {"BUY", "SELL"} and abs(combined_score) >= min_score and probability >= min_probability
+
+    # Use the snapshot with the strongest absolute score for the displayed
+    # indicator values and price; the direction comes from the multi-timeframe
+    # aggregate above.
+    primary = max(valid, key=lambda x: abs(int(x.get("score", 0))))
+    interval, duration = _auto_trade_plan(symbol, combined_score, probability)
 
     if not strong:
-        result.update({
+        primary.update({
             "mode": "auto",
             "signal": "WAIT",
-            "raw_signal": raw if raw in {"BUY", "SELL"} else "WAIT",
+            "raw_signal": direction if direction in {"BUY", "SELL"} else "WAIT",
+            "score": combined_score,
+            "probability": probability,
             "entry": None,
             "entry_now": False,
             "pre_entry": False,
@@ -656,34 +709,49 @@ def analyze_auto(symbol="BTCUSDT"):
             "duration_seconds": duration,
             "trade_duration": f"{duration}s",
             "trade_time": f"{duration}s",
-            "probability": probability,
             "signal_quality": "NO_STRONG_SETUP",
             "auto_timeframe": interval,
+            "checked_timeframes": list(timeframes),
+            "timeframe_scores": {str(x.get("interval")): int(x.get("score", 0)) for x in valid},
             "auto_plan": True,
         })
-        return result
+        return primary
 
-    now = int(time.time())
-    expiry = now + duration
-    result.update({
+    # Auto mode announces a qualified setup 10 seconds before entry.
+    # Entry is synchronized to the next 10-second boundary so the browser
+    # can show a real countdown instead of opening the trade immediately.
+    now = time.time()
+    entry_ts = (int(now) // PRE_ENTRY_SECONDS + 1) * PRE_ENTRY_SECONDS
+    remaining = max(0, int(math.ceil(entry_ts - now)))
+    since_boundary = now - ((int(now) // PRE_ENTRY_SECONDS) * PRE_ENTRY_SECONDS)
+    entry_now = 0 <= since_boundary <= ENTRY_CONFIRM_SECONDS
+    if entry_now:
+        entry_ts = int(now)
+        remaining = 0
+    expiry = int(entry_ts + duration)
+    primary.update({
         "mode": "auto",
-        "signal": raw,
-        "raw_signal": raw,
-        "entry": "NOW",
-        "entry_now": True,
-        "pre_entry": False,
-        "entry_countdown": 0,
-        "entry_ts": now,
+        "signal": direction if entry_now else direction,
+        "raw_signal": direction,
+        "entry": "NOW" if entry_now else f"IN {remaining}s",
+        "entry_now": entry_now,
+        "pre_entry": not entry_now,
+        "entry_countdown": remaining,
+        "next_candle_ts": int(entry_ts),
+        "entry_ts": int(entry_ts),
         "expiry_ts": expiry,
         "duration_seconds": duration,
         "trade_duration": f"{duration}s",
         "trade_time": f"{duration}s",
+        "score": combined_score,
         "probability": probability,
         "signal_quality": "STRONG_SETUP",
         "auto_timeframe": interval,
+        "checked_timeframes": list(timeframes),
+        "timeframe_scores": {str(x.get("interval")): int(x.get("score", 0)) for x in valid},
         "auto_plan": True,
     })
-    return result
+    return primary
 
 
 def analyze(symbol="BTCUSDT", interval="1h", mode="manual"):
