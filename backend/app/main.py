@@ -20,12 +20,13 @@ async def home(request: Request):
 @app.get("/analyze")
 def get_analysis(
     symbol: str = "BTCUSDT",
-    interval: str = "1h"
+    interval: str = "auto",
+    mode: str = "auto"
 ):
     # Route ALL symbols through the unified analyzer. This is important for
     # OTC/Forex because the analyzer adds the same 10-second pre-entry timer
     # and uses the project's TwelveData FX proxy with rate-limit protection.
-    return analyze(symbol, interval)
+    return analyze(symbol, interval, mode=mode)
 
 
 @app.get("/scan")
