@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 import ta
 from app.indicators.advanced import advanced_snapshot
+from app.providers.quotex_otc import get_otc_candles
 
 
 OKX_BASE_URL = "https://www.okx.com/api/v5/market/candles"
@@ -193,10 +194,14 @@ def _okx_symbol(symbol: str) -> str:
 
 
 def _get_candles(symbol: str, interval: str, limit: int = 300):
-    # OTC and Forex are supplied by TwelveData. OTC here means the selected
-    # OTC pair is analyzed from its underlying FX feed; broker-specific OTC
-    # quotes are not publicly standardized.
-    if _is_otc(symbol) or symbol.upper().strip() in FOREX_PAIRS:
+    # OTC uses the authenticated Quotex WebSocket feed. It deliberately has
+    # no TwelveData fallback, so an OTC signal can never be mislabeled as a
+    # Quotex quote when the broker feed is unavailable.
+    if _is_otc(symbol):
+        return get_otc_candles(symbol, interval, limit)
+
+    # Regular Forex/metals continue to use the existing TwelveData provider.
+    if symbol.upper().strip() in FOREX_PAIRS:
         return _get_twelvedata_candles(symbol, interval, limit)
 
     inst_id = _okx_symbol(symbol)
@@ -766,7 +771,9 @@ def analyze(symbol="BTCUSDT", interval="1h", mode="manual"):
     if str(mode).lower() == "auto" or str(interval).lower() == "auto":
         return analyze_auto(symbol)
 
-    if _is_otc(symbol) or symbol.upper().strip() in FOREX_PAIRS:
+    # OTC must use the Quotex candles through the same TA + Smart Money
+    # pipeline as crypto. Regular Forex keeps the existing provider path.
+    if symbol.upper().strip() in FOREX_PAIRS and not _is_otc(symbol):
         forex_result, forex_error = _analyze_forex_via_project_provider(symbol, interval)
         if forex_error:
             return forex_error
@@ -878,6 +885,6 @@ def analyze(symbol="BTCUSDT", interval="1h", mode="manual"):
         "atr": round(float(last["atr"]), 8),
         "interval": interval,
         "symbol": symbol.upper(),
-        "source": "TwelveData FX proxy" if (_is_otc(symbol) or symbol.upper().strip() in FOREX_PAIRS) else "OKX",
-        "otc_proxy": bool(_is_otc(symbol)),
+        "source": "QUOTEX OTC" if _is_otc(symbol) else ("TwelveData FX" if symbol.upper().strip() in FOREX_PAIRS else "OKX"),
+        "otc_proxy": False,
     }
