@@ -580,7 +580,67 @@ def _analyze_forex_via_project_provider(symbol: str, interval: str):
     }, None
 
 
-def analyze(symbol="BTCUSDT", interval="1h"):
+
+def _auto_trade_plan(symbol: str):
+    """Return a simple automatic plan without exposing a timeframe selector.
+
+    The UI chooses only the market. The engine selects a practical indicator
+    feed and expiry: OTC/FX uses 1-minute candles with 30s expiry, while crypto
+    uses 1-minute candles with 60s expiry. The signal direction is always BUY
+    or SELL; when the strict rule returns WAIT, the stronger side of the score
+    is used and the confidence is kept conservative.
+    """
+    clean = symbol.upper().strip()
+    if _is_otc(clean) or clean in FOREX_PAIRS:
+        return "1m", 30
+    return "1m", 60
+
+
+def analyze_auto(symbol="BTCUSDT"):
+    interval, duration = _auto_trade_plan(symbol)
+    result = analyze(symbol, interval, mode="manual")
+    if not isinstance(result, dict):
+        return {"error": "Invalid analysis response"}
+    if result.get("error"):
+        return result
+
+    raw = str(result.get("raw_signal") or result.get("signal") or "WAIT").upper()
+    score = int(result.get("score", 0) or 0)
+    if raw not in {"BUY", "SELL"}:
+        raw = "BUY" if score >= 0 else "SELL"
+
+    # Conservative automatic confidence. This is a model score, not a
+    # guarantee of a profitable trade.
+    probability = int(result.get("probability", 50) or 50)
+    if result.get("raw_signal") == "WAIT":
+        probability = min(69, max(51, 50 + min(19, abs(score) // 3)))
+
+    now = int(time.time())
+    expiry = now + duration
+    result.update({
+        "mode": "auto",
+        "signal": raw,
+        "raw_signal": raw,
+        "entry": "NOW",
+        "entry_now": True,
+        "pre_entry": False,
+        "entry_countdown": 0,
+        "entry_ts": now,
+        "expiry_ts": expiry,
+        "duration_seconds": duration,
+        "trade_duration": f"{duration}s",
+        "trade_time": f"{duration}s",
+        "probability": probability,
+        "auto_timeframe": interval,
+        "auto_plan": True,
+    })
+    return result
+
+
+def analyze(symbol="BTCUSDT", interval="1h", mode="manual"):
+    if str(mode).lower() == "auto" or str(interval).lower() == "auto":
+        return analyze_auto(symbol)
+
     if _is_otc(symbol) or symbol.upper().strip() in FOREX_PAIRS:
         forex_result, forex_error = _analyze_forex_via_project_provider(symbol, interval)
         if forex_error:
