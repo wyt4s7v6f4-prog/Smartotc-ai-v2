@@ -1,4 +1,6 @@
 import os
+import time
+import threading
 
 import pandas as pd
 import requests
@@ -7,14 +9,42 @@ import ta
 
 API_KEY = os.getenv("TWELVEDATA_API_KEY", "afdc8f80c3374bb7a5130679e76e57ae")
 
+# Twelve Data free/low-tier plans are rate-limited. The browser polls the
+# backend frequently for the 10-second entry timer, so do not hit Twelve Data
+# on every poll. Cache the calculated FX analysis briefly and reuse it during
+# the same candle. If a 429 happens, serve the last good result instead of
+# turning the UI into an ERROR.
+CACHE_TTL_SECONDS = 30
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_key(symbol, td_interval):
+    return (symbol.upper().strip(), td_interval)
+
+
+def _get_cached(key):
+    with _cache_lock:
+        item = _cache.get(key)
+    if not item:
+        return None
+    saved_at, value = item
+    if time.time() - saved_at <= CACHE_TTL_SECONDS:
+        return dict(value)
+    return None
+
+
+def _set_cached(key, value):
+    with _cache_lock:
+        _cache[key] = (time.time(), dict(value))
+
 
 def get_forex_data(symbol="EUR/USD", interval="1min"):
-    """Analyze Forex/OTC data from Twelve Data.
+    """Analyze Forex/OTC data from Twelve Data with rate-limit protection.
 
-    Twelve Data does not provide a true 10-second series on this endpoint,
-    so 10s/15s/30s requests are mapped to the available 1-minute candles.
-    BUY/SELL results are treated as actionable at the moment the analysis
-    response is generated and expose the same entry fields as the OKX path.
+    OTC is represented by the underlying FX pair. The data provider is called
+    at most once per cache window; the web UI may poll much more frequently
+    without consuming an API request on every timer tick.
     """
 
     interval_map = {
@@ -32,6 +62,11 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
 
     requested_interval = interval
     td_interval = interval_map.get(interval, "1min")
+    key = _cache_key(symbol, td_interval)
+
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
 
     url = "https://api.twelvedata.com/time_series"
     params = {
@@ -43,9 +78,11 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
 
     try:
         response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
         data = response.json()
     except requests.RequestException as exc:
+        cached = _get_cached(key)
+        if cached is not None:
+            return cached
         return {
             "error": "Twelve Data request failed",
             "details": str(exc),
@@ -53,22 +90,57 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
             "interval": requested_interval,
         }
     except ValueError:
+        cached = _get_cached(key)
+        if cached is not None:
+            return cached
         return {
             "error": "Twelve Data returned non-JSON response",
             "symbol": symbol,
             "interval": requested_interval,
         }
 
-    if "values" not in data:
+    # Twelve Data can return HTTP 429 and/or an API-level status message.
+    if response.status_code == 429 or str(data.get("status", "")).lower() == "error":
+        message = data.get("message") or data.get("code") or "Too Many Requests"
+        cached = _get_cached(key)
+        if cached is not None:
+            cached["rate_limited"] = True
+            cached["rate_limit_message"] = str(message)
+            return cached
         return {
-            "error": "Twelve Data API error",
+            "error": "Twelve Data rate limit",
+            "details": str(message),
+            "symbol": symbol,
+            "interval": requested_interval,
+        }
+
+    if response.status_code >= 400:
+        cached = _get_cached(key)
+        if cached is not None:
+            return cached
+        return {
+            "error": "Twelve Data HTTP error",
+            "status": response.status_code,
             "details": data,
             "symbol": symbol,
             "interval": requested_interval,
         }
 
+    if "values" not in data:
+        cached = _get_cached(key)
+        if cached is not None:
+            return cached
+        return {
+            "error": "Twelve Data API error",
+            "details": data,
+            "symbol": symbol,
+        }
+
     df = pd.DataFrame(data["values"])
     if len(df) < 60:
+        cached = _get_cached(key)
+        if cached is not None:
+            return cached
         return {
             "error": "Insufficient Forex candle data",
             "received": len(df),
@@ -88,7 +160,9 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
     df["ema50"] = ta.trend.ema_indicator(df["close"], window=50)
     df["rsi"] = ta.momentum.rsi(df["close"], window=14)
 
-    macd = ta.trend.MACD(df["close"], window_slow=26, window_fast=12, window_sign=9)
+    macd = ta.trend.MACD(
+        df["close"], window_slow=26, window_fast=12, window_sign=9
+    )
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
 
@@ -133,10 +207,9 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
     else:
         signal = "WAIT"
 
-    entry_now = signal in {"BUY", "SELL"}
     probability = min(95, max(50, 50 + int(abs(score) * 0.45)))
 
-    return {
+    result = {
         "price": round(float(last["close"]), 5),
         "ema20": round(float(last["ema20"]), 5),
         "ema50": round(float(last["ema50"]), 5),
@@ -145,11 +218,14 @@ def get_forex_data(symbol="EUR/USD", interval="1min"):
         "score": int(score),
         "probability": probability,
         "trend": "BULLISH" if last["ema20"] > last["ema50"] else "BEARISH",
-        "entry": "NOW" if entry_now else None,
-        "entry_now": entry_now,
-        "trade_time": "NOW" if entry_now else None,
+        "entry": None,
+        "entry_now": False,
+        "trade_time": None,
         "interval": requested_interval,
         "data_interval": td_interval,
         "symbol": symbol,
         "source": "Twelve Data",
     }
+
+    _set_cached(key, result)
+    return result
