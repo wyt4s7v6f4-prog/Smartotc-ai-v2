@@ -177,6 +177,7 @@ button:disabled{
 </select>
 
 <select id="interval">
+    <option>30s</option>
     <option>1m</option>
     <option>5m</option>
     <option>15m</option>
@@ -231,7 +232,8 @@ button:disabled{
     </div>
 
     <div class="note">
-        Signal is checked automatically. When a BUY/SELL setup is confirmed,
+        Signal is checked automatically. In 30s mode the entry clock runs on 30-second boundaries;
+        FX/OTC indicators use the latest available 1-minute feed. For other intervals,
         the entry alert appears during the final 10 seconds before the next candle.
         OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
     </div>
