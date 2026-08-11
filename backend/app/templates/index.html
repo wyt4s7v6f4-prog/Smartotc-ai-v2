@@ -11,6 +11,8 @@ body{
     color:white;
     font-family:Arial,sans-serif;
     text-align:center;
+    margin:0;
+    padding:0 0 30px;
 }
 
 .container{
@@ -21,6 +23,7 @@ body{
 
 h1{
     font-size:42px;
+    margin:18px 0 20px;
 }
 
 select,button{
@@ -68,9 +71,27 @@ button:disabled{
 }
 
 .countdown{
-    font-size:34px;
+    font-size:42px;
+    font-weight:900;
+    margin:10px 0 12px;
+    min-height:48px;
+}
+
+.otc-badge{
+    display:inline-block;
+    background:#7c3aed;
+    color:#fff;
+    padding:5px 10px;
+    border-radius:999px;
+    font-size:13px;
     font-weight:bold;
-    margin:8px 0;
+    margin-top:4px;
+}
+
+.entry-alert{
+    font-size:24px;
+    font-weight:900;
+    margin:6px 0;
 }
 
 .item{
@@ -82,6 +103,21 @@ button:disabled{
     margin-top:16px;
     color:#94a3b8;
     font-size:14px;
+}
+
+@media (max-width: 520px){
+    .container{
+        width:min(94vw,420px);
+        margin-top:14px;
+    }
+    h1{font-size:34px; margin:14px 0 16px;}
+    select,button{font-size:16px; padding:11px 10px; margin:6px 3px;}
+    .card{margin-top:18px; padding:16px 12px;}
+    .buy,.sell,.wait{font-size:32px;}
+    .item{font-size:17px; margin:7px 2px;}
+    .countdown{font-size:40px;}
+    .entry-alert{font-size:20px;}
+    .note{font-size:12px; line-height:1.4;}
 }
 </style>
 
@@ -150,6 +186,8 @@ button:disabled{
     <option>1d</option>
 </select>
 
+<div id="otcBadge" class="otc-badge" style="display:none;">OTC • FX PROXY FEED</div>
+
 <br>
 
 <button id="analyzeBtn" onclick="startAnalysis()">Analyze</button>
@@ -160,7 +198,7 @@ button:disabled{
 
     <div id="countdown" class="countdown"></div>
 
-    <div id="entry" class="item" style="font-weight:bold;"></div>
+    <div id="entry" class="entry-alert"></div>
 
     <div class="item">
         💰 Price:
@@ -193,8 +231,9 @@ button:disabled{
     </div>
 
     <div class="note">
-        Signal is checked automatically. Entry alert is shown only during
-        the final 10 seconds before the next candle.
+        Signal is checked automatically. When a BUY/SELL setup is confirmed,
+        the entry alert appears during the final 10 seconds before the next candle.
+        OTC uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
     </div>
 
 </div>
@@ -217,6 +256,14 @@ function selectedSymbol(){
     return $("symbol").value;
 }
 
+function isOTC(){
+    return selectedSymbol().toUpperCase().includes(" OTC");
+}
+
+function updateOTCBadge(){
+    $("otcBadge").style.display = isOTC() ? "inline-block" : "none";
+}
+
 function setSignalClass(signal){
     const el = $("signal");
     el.className = "";
@@ -231,6 +278,7 @@ function setSignalClass(signal){
 }
 
 function clearDisplay(message="WAIT"){
+    updateOTCBadge();
     $("signal").innerHTML = message;
     setSignalClass("WAIT");
     $("countdown").innerHTML = "";
@@ -245,6 +293,7 @@ function clearDisplay(message="WAIT"){
 
 function renderData(data){
     lastData = data;
+    updateOTCBadge();
 
     if(!data || data.error){
         clearDisplay("ERROR");
@@ -376,23 +425,24 @@ function startLocalCountdown(){
         const remaining = Math.ceil(
             Number(lastData.next_candle_ts) - now
         );
+        const signal = lastData.raw_signal || lastData.signal;
+        const isTrade = signal === "BUY" || signal === "SELL";
 
-        if(
-            lastData.pre_entry === true &&
-            (lastData.signal === "BUY" || lastData.signal === "SELL") &&
-            remaining > 0 &&
-            remaining <= 10
-        ){
+        if(isTrade && remaining > 0 && remaining <= 10){
+            // This is the actual 10-second pre-entry countdown.
+            lastData.pre_entry = true;
+            lastData.entry_countdown = remaining;
+            lastData.signal = signal;
+
             $("countdown").innerHTML = "⏱️ " + remaining;
-            $("entry").innerHTML =
-                "⚡ ENTRY IN " + remaining + "s";
+            $("entry").innerHTML = "⚡ ENTRY IN " + remaining + "s";
             $("time").innerHTML = "IN " + remaining + "s";
-            $("signal").innerHTML =
-                lastData.signal + " — ENTRY IN " + remaining + "s";
+            $("signal").innerHTML = signal + " — ENTRY IN " + remaining + "s";
+            setSignalClass(signal);
         }
 
         if(remaining <= 0){
-            // Do not invent an entry. Ask the backend to confirm it.
+            // Never invent ENTRY NOW locally: ask the backend to confirm it.
             $("countdown").innerHTML = "🔎 CHECKING...";
             fetchAnalysis();
         }
@@ -423,11 +473,14 @@ $("symbol").addEventListener("change", () => {
 });
 
 $("interval").addEventListener("change", () => {
+    updateOTCBadge();
     if(running){
         stopTimers();
         startAnalysis();
     }
 });
+
+updateOTCBadge();
 </script>
 
 </body>
