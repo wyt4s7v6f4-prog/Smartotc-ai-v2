@@ -21,15 +21,13 @@ INTERVAL_MAP = {
 
 
 def _okx_symbol(symbol: str) -> str:
-    """Convert BTCUSDT-style symbols to OKX perpetual swap instruments."""
     clean = symbol.upper().replace("/", "").replace("-", "")
     if clean.endswith("USDT"):
-        base = clean[:-4]
-        return f"{base}-USDT-SWAP"
+        return f"{clean[:-4]}-USDT-SWAP"
     return clean
 
 
-def _get_candles(symbol: str, interval: str, limit: int = 250):
+def _get_candles(symbol: str, interval: str, limit: int = 300):
     inst_id = _okx_symbol(symbol)
     bar = INTERVAL_MAP.get(interval, "1H")
 
@@ -76,28 +74,21 @@ def _get_candles(symbol: str, interval: str, limit: int = 250):
             "interval": bar,
         }
 
-    # OKX returns newest candles first. Keep chronological order for indicators.
     rows = list(reversed(rows))
-
     parsed = []
     for row in rows:
         if len(row) < 9:
             continue
-        parsed.append(
-            {
-                "time": int(row[0]),
-                "open": float(row[1]),
-                "high": float(row[2]),
-                "low": float(row[3]),
-                "close": float(row[4]),
-                "volume": float(row[5]),
-                "confirm": str(row[8]),
-            }
-        )
+        parsed.append({
+            "time": int(row[0]),
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": float(row[5]),
+            "confirm": str(row[8]),
+        })
 
-    # Keep the currently forming candle so signals can be generated from
-    # the market conditions that exist right now. Because this candle is
-    # live, the signal may change before the candle closes.
     if len(parsed) < 200:
         return None, {
             "error": "Insufficient candle data",
@@ -109,177 +100,176 @@ def _get_candles(symbol: str, interval: str, limit: int = 250):
     return parsed, None
 
 
-def analyze(symbol="BTCUSDT", interval="1h"):
-    candles, error = _get_candles(symbol, interval)
-    if error:
-        return error
-
-    df = pd.DataFrame(candles)
-    df = df.drop(columns=["confirm"], errors="ignore")
-
-    # Indicators used by the original project, with additional filters to
-    # reduce weak/contradictory signals.
+def _indicator_frame(candles):
+    df = pd.DataFrame(candles).copy()
     df["ema20"] = ta.trend.ema_indicator(df["close"], window=20)
     df["ema50"] = ta.trend.ema_indicator(df["close"], window=50)
     df["ema200"] = ta.trend.ema_indicator(df["close"], window=200)
     df["rsi"] = ta.momentum.rsi(df["close"], window=14)
 
-    macd = ta.trend.MACD(df["close"], window_slow=26, window_fast=12, window_sign=9)
+    macd = ta.trend.MACD(
+        df["close"], window_slow=26, window_fast=12, window_sign=9
+    )
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
     df["atr"] = ta.volatility.average_true_range(
         df["high"], df["low"], df["close"], window=14
     )
 
-    # Drop incomplete indicator rows before evaluating the latest candle.
-    df = df.dropna().reset_index(drop=True)
-    if len(df) < 2:
-        return {"error": "Not enough data after indicator calculation"}
+    return df.dropna().reset_index(drop=True)
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
 
+def _score_row(row, prev):
     score = 0
 
-    # Trend structure.
-    bullish_trend = last["ema20"] > last["ema50"] > last["ema200"]
-    bearish_trend = last["ema20"] < last["ema50"] < last["ema200"]
+    bullish_trend = row["ema20"] > row["ema50"] > row["ema200"]
+    bearish_trend = row["ema20"] < row["ema50"] < row["ema200"]
 
     if bullish_trend:
         score += 30
     elif bearish_trend:
         score -= 30
 
-    # Price location relative to EMA20.
-    if last["close"] > last["ema20"]:
+    if row["close"] > row["ema20"]:
         score += 10
-    elif last["close"] < last["ema20"]:
+    elif row["close"] < row["ema20"]:
         score -= 10
 
-    # RSI momentum while avoiding extreme conditions.
-    if 52 <= last["rsi"] <= 68:
+    if 52 <= row["rsi"] <= 68:
         score += 15
-    elif 32 <= last["rsi"] < 48:
+    elif 32 <= row["rsi"] < 48:
         score -= 15
-    elif 68 < last["rsi"] <= 75:
+    elif 68 < row["rsi"] <= 75:
         score += 5
-    elif 25 <= last["rsi"] < 32:
+    elif 25 <= row["rsi"] < 32:
         score += 5
-    elif last["rsi"] > 75:
+    elif row["rsi"] > 75:
         score -= 15
-    elif last["rsi"] < 25:
+    elif row["rsi"] < 25:
         score += 15
 
-    # MACD direction and crossover.
-    macd_bull = last["macd"] > last["macd_signal"]
-    macd_bear = last["macd"] < last["macd_signal"]
-    macd_cross_up = (
-        last["macd"] > last["macd_signal"]
-        and prev["macd"] <= prev["macd_signal"]
-    )
-    macd_cross_down = (
-        last["macd"] < last["macd_signal"]
-        and prev["macd"] >= prev["macd_signal"]
-    )
+    macd_bull = row["macd"] > row["macd_signal"]
+    macd_bear = row["macd"] < row["macd_signal"]
 
     if macd_bull:
         score += 15
     elif macd_bear:
         score -= 15
 
-    if macd_cross_up:
+    if row["macd"] > row["macd_signal"] and prev["macd"] <= prev["macd_signal"]:
         score += 10
-    elif macd_cross_down:
+    elif row["macd"] < row["macd_signal"] and prev["macd"] >= prev["macd_signal"]:
         score -= 10
 
-    # LIVE ENTRY: current candle is included, so BUY/SELL can be returned
-    # immediately when the live conditions align.
     if (
         score >= 60
         and bullish_trend
-        and last["close"] >= last["ema20"]
-        and 45 <= last["rsi"] <= 75
+        and row["close"] >= row["ema20"]
+        and 45 <= row["rsi"] <= 75
     ):
         signal = "BUY"
     elif (
         score <= -60
         and bearish_trend
-        and last["close"] <= last["ema20"]
-        and 25 <= last["rsi"] <= 55
+        and row["close"] <= row["ema20"]
+        and 25 <= row["rsi"] <= 55
     ):
         signal = "SELL"
     else:
         signal = "WAIT"
 
-    if bullish_trend:
-        score += 30
-    elif bearish_trend:
-        score -= 30
+    return int(score), signal
 
-    # Price location relative to EMA20.
-    if last["close"] > last["ema20"]:
-        score += 10
-    elif last["close"] < last["ema20"]:
-        score -= 10
 
-    # RSI: avoid chasing extreme conditions.
-    if 50 <= last["rsi"] <= 65:
-        score += 15
-    elif 35 <= last["rsi"] < 50:
-        score -= 5
-    elif 65 < last["rsi"] <= 75:
-        score += 5
-    elif last["rsi"] < 30:
-        score += 5
-    elif last["rsi"] > 75:
-        score -= 10
+def _empirical_probability(df, current_score, current_signal):
+    """
+    Estimate probability from historical signals generated by the same rules.
 
-    # MACD direction and crossover confirmation.
-    macd_bull = last["macd"] > last["macd_signal"]
-    macd_bear = last["macd"] < last["macd_signal"]
-    macd_cross_up = last["macd"] > last["macd_signal"] and prev["macd"] <= prev["macd_signal"]
-    macd_cross_down = last["macd"] < last["macd_signal"] and prev["macd"] >= prev["macd_signal"]
+    Outcome = next candle close in the predicted direction.
+    This is a simple historical calibration, not a guarantee of future profit.
+    """
+    if current_signal == "WAIT":
+        return 50
 
-    if macd_bull:
-        score += 15
-    elif macd_bear:
-        score -= 15
+    records = []
+    # Use closed historical candles only. Leave the newest row out because it
+    # may still be forming and has no known future outcome.
+    for i in range(1, len(df) - 1):
+        row = df.iloc[i]
+        prev = df.iloc[i - 1]
+        score, signal = _score_row(row, prev)
 
-    if macd_cross_up:
-        score += 5
-    elif macd_cross_down:
-        score -= 5
+        if signal not in {"BUY", "SELL"}:
+            continue
 
-    # Signal thresholds deliberately require confirmation.
-    if score >= 60 and not (last["rsi"] > 75):
-        signal = "BUY"
-    elif score <= -60 and not (last["rsi"] < 25):
-        signal = "SELL"
-    else:
-        signal = "WAIT"
+        next_close = float(df.iloc[i + 1]["close"])
+        close_now = float(row["close"])
+        won = next_close > close_now if signal == "BUY" else next_close < close_now
 
-    if bullish_trend:
+        # Compare signals of similar strength, not every historical signal.
+        if abs(score - current_score) <= 20 and signal == current_signal:
+            records.append(int(won))
+
+    # If the similar-signal sample is too small, broaden the sample.
+    if len(records) < 8:
+        records = []
+        for i in range(1, len(df) - 1):
+            row = df.iloc[i]
+            prev = df.iloc[i - 1]
+            score, signal = _score_row(row, prev)
+            if signal != current_signal:
+                continue
+            next_close = float(df.iloc[i + 1]["close"])
+            close_now = float(row["close"])
+            won = next_close > close_now if signal == "BUY" else next_close < close_now
+            records.append(int(won))
+
+    if len(records) >= 8:
+        # Light smoothing avoids presenting 100%/0% from a small sample.
+        wins = sum(records)
+        n = len(records)
+        probability = round((wins + 1) / (n + 2) * 100)
+        return max(50, min(90, probability))
+
+    # Not enough historical signals: use a conservative confidence estimate.
+    # This is explicitly a fallback, not a historical win rate.
+    fallback = 50 + min(30, max(0, abs(current_score) - 60))
+    return int(fallback)
+
+
+def analyze(symbol="BTCUSDT", interval="1h"):
+    candles, error = _get_candles(symbol, interval)
+    if error:
+        return error
+
+    df = _indicator_frame(candles)
+    if len(df) < 3:
+        return {"error": "Not enough data after indicator calculation"}
+
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    score, signal = _score_row(last, prev)
+
+    if last["ema20"] > last["ema50"] > last["ema200"]:
         trend = "UPTREND"
-    elif bearish_trend:
+    elif last["ema20"] < last["ema50"] < last["ema200"]:
         trend = "DOWNTREND"
     else:
         trend = "SIDEWAYS"
 
-    # Live-entry fields:
-    # BUY/SELL means the signal is actionable immediately when returned.
-    # WAIT means there is no confirmed entry right now.
+    # Calibrate against closed historical candles. The current candle remains
+    # live, so ENTRY NOW can appear without waiting for candle close.
+    probability = _empirical_probability(df, score, signal)
+
     entry = "NOW" if signal in {"BUY", "SELL"} else None
     trade_time = "NOW" if signal in {"BUY", "SELL"} else None
-
-    # Keep compatibility with existing callers and expose a simple probability
-    # estimate derived from the strategy score. This is NOT a win-rate guarantee.
-    probability = min(95, max(50, 50 + int(abs(score) * 0.75)))
 
     return {
         "signal": signal,
         "trend": trend,
         "score": int(score),
-        "probability": probability,
+        "probability": int(probability),
         "entry": entry,
         "entry_now": signal in {"BUY", "SELL"},
         "trade_time": trade_time,
