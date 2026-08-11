@@ -454,6 +454,9 @@ def _entry_window(interval: str):
             "next_candle_ts": None,
             "pre_entry": False,
             "entry_now": False,
+            "entry_ts": None,
+            "expiry_ts": None,
+            "duration_seconds": None,
         }
 
     now = time.time()
@@ -471,12 +474,21 @@ def _entry_window(interval: str):
         and 0 < remaining <= PRE_ENTRY_SECONDS
     )
 
+    duration_seconds = seconds
+    entry_ts = int(next_candle_ts) if pre_entry else (
+        int(current_boundary) if entry_now else int(next_candle_ts)
+    )
+    expiry_ts = int(entry_ts + duration_seconds)
+
     return {
         "supported": True,
         "remaining": max(0, int(remaining + 0.999)),
         "next_candle_ts": int(next_candle_ts),
         "pre_entry": pre_entry,
         "entry_now": entry_now,
+        "entry_ts": entry_ts,
+        "expiry_ts": expiry_ts,
+        "duration_seconds": duration_seconds,
     }
 
 
@@ -528,10 +540,10 @@ def _analyze_forex_via_project_provider(symbol: str, interval: str):
     entry_now = bool(timing["entry_now"] and strong_signal)
 
     if entry_now:
-        trade_time = "NOW"
+        trade_time = f"{timing['duration_seconds']}s"
         entry = "NOW"
     elif pre_entry:
-        trade_time = f"IN {timing['remaining']}s"
+        trade_time = f"{timing['duration_seconds']}s"
         entry = f"IN {timing['remaining']}s"
     else:
         trade_time = None
@@ -551,6 +563,10 @@ def _analyze_forex_via_project_provider(symbol: str, interval: str):
         "pre_entry": pre_entry,
         "entry_countdown": timing["remaining"],
         "next_candle_ts": timing["next_candle_ts"],
+        "entry_ts": timing["entry_ts"],
+        "expiry_ts": timing["expiry_ts"],
+        "duration_seconds": timing["duration_seconds"],
+        "trade_duration": f'{timing["duration_seconds"]}s',
         "trade_time": trade_time,
         "signal_live": True,
         "price": result.get("price"),
@@ -618,11 +634,11 @@ def analyze(symbol="BTCUSDT", interval="1h"):
     entry_now = bool(timing["entry_now"] and strong_signal)
 
     if entry_now:
-        trade_time = "NOW"
+        trade_time = f"{timing['duration_seconds']}s"
         entry = "NOW"
 
     elif pre_entry:
-        trade_time = f"IN {timing['remaining']}s"
+        trade_time = f"{timing['duration_seconds']}s"
         entry = f"IN {timing['remaining']}s"
 
     else:
@@ -640,6 +656,10 @@ def analyze(symbol="BTCUSDT", interval="1h"):
         "pre_entry": pre_entry,
         "entry_countdown": timing["remaining"],
         "next_candle_ts": timing["next_candle_ts"],
+        "entry_ts": timing["entry_ts"],
+        "expiry_ts": timing["expiry_ts"],
+        "duration_seconds": timing["duration_seconds"],
+        "trade_duration": f'{timing["duration_seconds"]}s',
         "trade_time": trade_time,
         "signal_live": True,
         "price": round(float(last["close"]), 8),
