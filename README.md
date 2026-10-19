@@ -16,11 +16,11 @@ AUTO mode does not force BUY/SELL when the setup is weak. A trade is issued only
 OTC/FX uses the underlying FX feed as a proxy; broker-specific OTC prices can differ.
 
 
-## Pocket Option Telegram bot (new scaffold)
-- Backend adds `/pocket-option/status` and `/pocket-option/analyze`.
-- `backend/bot.py` adds Telegram menu and requests analysis from the API.
-- Set `TELEGRAM_BOT_TOKEN` and `API_BASE_URL` in Render.
-- Deploy the existing web service from `backend/` using `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-- Add a Render Background Worker with root directory `backend`, build command `pip install -r requirements.txt`, start command `python bot.py`.
-- The Pocket Option endpoint deliberately returns no CALL/PUT until a provider for the platform's own OTC quotes has been verified and integrated. Existing Quotex data and Twelve Data FX candles are not silently substituted for Pocket Option OTC.
-- This scaffold does not yet implement Premium payments, database-backed history, or a real directional strategy.
+## Free Render Web Service Telegram webhook
+Telegram updates are handled by `POST /telegram/webhook` inside the existing FastAPI Web Service. No Background Worker is required.
+Add these Environment Variables to the existing Render Web Service:
+- `TELEGRAM_BOT_TOKEN`: token from @BotFather
+- `PUBLIC_BASE_URL`: public HTTPS URL of this Render service, no trailing slash
+- `TELEGRAM_WEBHOOK_SECRET`: random secret with letters, digits, `_` or `-`
+The app registers the webhook on startup. Check `/telegram/status`.
+Free Render services can spin down when idle, so first response after idle can be delayed. This does not connect verified Pocket Option OTC prices; live CALL/PUT remains disabled until a real provider and strategy are validated.
