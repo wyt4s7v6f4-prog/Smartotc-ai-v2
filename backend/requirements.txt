@@ -8,4 +8,5 @@ numpy
 ta
 jinja2
 git+https://github.com/A11ksa/API-Quotex.git
-\npython-telegram-bot>=21.6,<22.0\nhttpx>=0.27,<1.0\n
+
+httpx>=0.27,<1.0

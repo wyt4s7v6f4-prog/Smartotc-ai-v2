@@ -5,3 +5,5 @@ services:
   rootDir: backend
   buildCommand: pip install -r requirements.txt
   startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+# Telegram runs through FastAPI webhook; no Background Worker needed.
